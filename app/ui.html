@@ -329,6 +329,24 @@ modelView.innerHTML = head('MODEL / KEYS', '模型与密钥', '机器人要调�
     <div class="hint">OpenAI 兼容接口都行：DeepSeek 官方、中转站、本地 vLLM。</div>
   </div>
   <div class="card">
+    <h2>后端</h2>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:500">
+      <input type="radio" name="backend" id="backendStandalone" value="standalone" style="width:auto"> 直连模型 API（默认）
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:6px;font-weight:500">
+      <input type="radio" name="backend" id="backendDsh" value="dsh" style="width:auto"> 连 DeepSeek Harness
+    </label>
+    <div style="margin-top:10px">
+      <label>DSH 地址</label>
+      <input id="dshBaseUrl" placeholder="http://127.0.0.1:3080">
+      <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+        <button id="btn-fetch-dsh">检测 DSH 端口</button>
+        <span class="hint" id="dsh-hint" style="margin:0">DSH 每次启动会换端口，点一下自动找</span>
+      </div>
+    </div>
+    <div class="hint">不用 DSH 就选第一项：机器人自己直连模型，不需要额外程序。</div>
+  </div>
+  <div class="card">
     <h2>语音合成</h2>
     <div class="two">
       <div><label>接口地址</label><input id="ttsBaseUrl" placeholder="https://api.fish.audio"></div>
@@ -718,6 +736,15 @@ async function refreshStatus() {
       $('web-mask').textContent = web.hasKey ? '（已设置，留空不改）' : '（未设置）';
       $('gw-mask').textContent = gate.hasToken ? '（已设置，留空不改）' : '（未设置）';
       $('ct-mask').textContent = s.config.hasConsoleToken ? '（已设置，留空不改）' : '（未设置）';
+      // 后端：standalone（直连模型）/ dsh（连 DeepSeek Harness）
+      const dshCfg = s.config.dsh || {};
+      const onDsh = s.config.backend === 'dsh';
+      $('backendDsh').checked = onDsh;
+      $('backendStandalone').checked = !onDsh;
+      if (!$('dshBaseUrl').value) $('dshBaseUrl').value = dshCfg.baseUrl || '';
+      $('dsh-hint').textContent = onDsh
+        ? (dshCfg.baseUrl ? '当前配置：' + dshCfg.baseUrl : '还没填地址，点「检测 DSH 端口」')
+        : 'DSH 每次启动会换端口，点一下自动找';
     }
 
     // 从「未启动」变成「已启动」时，把当前功能页的提示换掉
@@ -829,7 +856,9 @@ async function saveAll(btnId, toastId) {
         wsUrl: $('wsUrl').value, httpUrl: $('httpUrl').value, accessToken: $('accessToken').value,
         groups: $('groups').value, private: $('private').value,
         ownerQQ: $('ownerQQ').value, consolePort: $('consolePort').value,
-        consoleToken: $('consoleToken').value
+        consoleToken: $('consoleToken').value,
+        backend: $('backendDsh').checked ? 'dsh' : 'standalone',
+        dshBaseUrl: $('dshBaseUrl').value
       })
     });
     for (const id of ['apiKey', 'ttsApiKey', 'webSearchApiKey', 'accessToken', 'consoleToken']) $(id).value = '';
@@ -949,8 +978,25 @@ $('btn-fetch-models').onclick = async () => {
   } finally { btn.disabled = false; }
 };
 
-$('btn-save').onclick = () => saveAll('btn-save', 'toast3');
-$('btn-save2').onclick = () => saveAll('btn-save2', 'toast4');
+// 「检测 DSH 端口」：DSH 桌面端每次启动换随机端口，面板现场扫一遍再填进来。
+$('btn-fetch-dsh').onclick = async () => {
+  const btn = $('btn-fetch-dsh');
+  btn.disabled = true;
+  $('dsh-hint').textContent = '正在扫描本机端口…';
+  try {
+    const r = await api('dsh/endpoint');
+    if (r.ok && r.baseUrl) {
+      $('dshBaseUrl').value = r.baseUrl;
+      $('dsh-hint').textContent = '找到 DSH：' + r.baseUrl + '（' + r.ms + 'ms，已填入上方，点「保存配置」写进配置）';
+    } else {
+      $('dsh-hint').textContent = '没找到正在运行的 DSH：先打开 DeepSeek Harness 再点一次';
+    }
+  } catch (e) {
+    $('dsh-hint').textContent = '失败：' + e.message;
+  } finally { btn.disabled = false; }
+};
+
+$('btn-save').onclick = () => saveAll('btn-save', 'toast3');$('btn-save2').onclick = () => saveAll('btn-save2', 'toast4');
 $('btn-log-bridge').onclick = () => { logWhich = 'bridge'; loadLogs(); };
 $('btn-log-gw').onclick = () => { logWhich = 'snowluma'; loadLogs(); };
 $('btn-log-refresh').onclick = () => loadLogs();

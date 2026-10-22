@@ -149,7 +149,14 @@ async function status() {
             wsUrl: cfg.snowluma?.wsUrl ?? '',
             httpUrl: cfg.snowluma?.httpUrl ?? ''
           },
-          hasConsoleToken: !!String(cfg.consoleToken ?? '').trim()
+          hasConsoleToken: !!String(cfg.consoleToken ?? '').trim(),
+          // 后端是 standalone（直连模型 API，默认）还是 dsh（连 DeepSeek Harness）。
+          // 选 dsh 时端口每次都会变，界面上要给"检测端口"的按钮。
+          backend: cfg.backend === 'dsh' ? 'dsh' : 'standalone',
+          dsh: {
+            baseUrl: cfg.dsh?.baseUrl ?? '',
+            hasToken: !!String(cfg.dsh?.authToken ?? '').trim()
+          }
         }
       : null,
     // 桥接控制台（完整功能：角色卡、TTS、二代仿真、黑话、调试…）就嵌在面板的选项卡里。
@@ -400,6 +407,16 @@ function mergeConfig(base, input) {
   const consoleToken = String(input.consoleToken ?? '').trim();
   if (consoleToken) next.consoleToken = consoleToken;
   if (!next.consoleToken) next.consoleToken = crypto.randomBytes(8).toString('hex');
+
+  // 可选后端 dsh（连 DeepSeek Harness）：它的端口每次启动都换，所以界面上给了"检测"按钮，
+  // 检测完写回这里的 dsh.baseUrl。
+  const prevDsh = next.dsh ?? {};
+  next.dsh = { ...prevDsh };
+  const dshBaseUrl = String(input.dshBaseUrl ?? '').trim().replace(/\/+$/, '');
+  if (dshBaseUrl) next.dsh.baseUrl = dshBaseUrl;
+  const dshToken = String(input.dshAuthToken ?? '').trim();
+  if (dshToken) next.dsh.authToken = dshToken;
+
   if (String(input.backend ?? '').trim()) next.backend = input.backend === 'dsh' ? 'dsh' : 'standalone';
   return next;
 }
@@ -605,6 +622,23 @@ const server = http.createServer(async (req, res) => {
           const msg = error?.name === 'TimeoutError' ? '请求超时（20s）' : (error?.message ?? String(error));
           return json(res, 502, { ok: false, error: `拉取模型列表失败：${msg}` });
         }
+      }
+      if (sub === 'dsh/endpoint' && req.method === 'GET') {
+        // 「检测 DSH 端口」：DSH 桌面端每次启动会换一个随机端口，而桥接的地址写在 config.json 里。
+        // 这里现场扫一遍（netstat + HTTP 指纹认得 DSH 的 401 / __DSH_BOOT__），把结果交给界面填。
+        const started = Date.now();
+        const script = path.join(ROOT, 'scripts', 'dsh-endpoint.mjs');
+        if (!fs.existsSync(script)) {
+          return json(res, 501, { ok: false, error: '这个版本没带 dsh-endpoint.mjs（只有选 DSH 后端才需要）' });
+        }
+        const result = await new Promise((resolve) => {
+          execFile(process.execPath, [script, '--json'], { cwd: ROOT, timeout: 30000, windowsHide: true }, (error, stdout) => {
+            if (error) return resolve({ ok: false, error: `检测失败：${error.message}` });
+            const last = String(stdout).trim().split(/\r?\n/).filter(Boolean).pop() ?? '';
+            try { resolve(JSON.parse(last)); } catch { resolve({ ok: false, error: `识别不了检测输出：${last.slice(0, 120)}` }); }
+          });
+        });
+        return json(res, 200, { ...result, ms: Date.now() - started });
       }
       if (req.method === 'POST' && sub === 'snowluma/start') return json(res, 200, await startSnowLuma());
       if (req.method === 'POST' && sub === 'snowluma/stop') return json(res, 200, await stopSnowLuma());

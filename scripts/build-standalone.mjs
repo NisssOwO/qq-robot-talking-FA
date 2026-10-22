@@ -71,6 +71,15 @@ step('src', () => copyDir(path.join(ROOT, 'src'), path.join(OUT, 'src'), { filte
 // 1b) 配置向导（app/setup.mjs，start.bat 起不来时先开它）
 step('app', () => copyDir(path.join(ROOT, 'app'), path.join(OUT, 'app'), { filter: (name) => !/[.]bak-|[.]orig$|^[.]DS_Store$/.test(name) }));
 
+// 1c) 面板会调用的运维脚本：DSH 端口检测（只有把 backend 切成 dsh 时才用得上）
+step('scripts', () => {
+  const from = path.join(ROOT, 'scripts', 'dsh-endpoint.mjs');
+  const to = path.join(OUT, 'scripts');
+  fs.mkdirSync(to, { recursive: true });
+  fs.copyFileSync(from, path.join(to, 'dsh-endpoint.mjs'));
+  return 'dsh-endpoint.mjs';
+});
+
 // 2) 依赖（运行期只需要 dependencies；node_modules 里没有原生模块）
 step('node_modules', () => copyDir(path.join(ROOT, 'node_modules'), path.join(OUT, 'node_modules'), { skip: ['.bin', '.cache'] }));
 
