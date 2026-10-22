@@ -300,7 +300,7 @@ statusView.innerHTML = head('LAUNCHER', '启动与状态', '把网关和机器�
   <div class="card span2">
     <h2>日志</h2>
     <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:10px">
-      <div class="btns"><button id="btn-log-bridge">桥接日志</button><button id="btn-log-gw">网关日志</button></div>
+      <div class="btns"><button id="btn-log-bridge">桥接日志</button><button id="btn-log-gw">网关日志</button><button id="btn-log-ui">面板日志</button></div>
       <button id="btn-log-refresh">刷新</button>
     </div>
     <pre id="log">—</pre>
@@ -999,6 +999,7 @@ $('btn-fetch-dsh').onclick = async () => {
 $('btn-save').onclick = () => saveAll('btn-save', 'toast3');$('btn-save2').onclick = () => saveAll('btn-save2', 'toast4');
 $('btn-log-bridge').onclick = () => { logWhich = 'bridge'; loadLogs(); };
 $('btn-log-gw').onclick = () => { logWhich = 'snowluma'; loadLogs(); };
+$('btn-log-ui').onclick = () => { logWhich = 'ui'; loadLogs(); };
 $('btn-log-refresh').onclick = () => loadLogs();
 
 // ── 静默时间 ────────────────────────────────────────────

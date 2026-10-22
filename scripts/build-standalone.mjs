@@ -180,11 +180,13 @@ const panelBat = [
   '  pause',
   '  exit /b 1',
   ')',
-  'echo 正在打开控制面板……',
-  'node.exe app\\ui.mjs',
-  'echo.',
-  'echo 面板已关闭（本窗口启动的网关/机器人已一并停止）。按任意键退出。',
-  'pause >nul',
+  'if not exist app\\hide.vbs (',
+  '  echo [错误] 缺少 app\\hide.vbs，无法后台启动面板。',
+  '  pause',
+  '  exit /b 1',
+  ')',
+  'rem 用 wscript 隐藏启动面板：不留下黑窗口，面板日志在界面里看。',
+  'wscript.exe //nologo "app\\hide.vbs"',
   ''
 ].join('\r\n');
 fs.writeFileSync(path.join(OUT, 'start.bat'), panelBat, 'utf8');
@@ -263,7 +265,7 @@ fs.writeFileSync(path.join(OUT, 'README.txt'), [
   '- 双击「QQ聊天机器人.exe」再改也行（面板里的「模型与密钥」「对话范围」）。setup.bat 是同一个面板。',
   '- 也可以直接编辑 config.json。',
   '- 面板地址 http://127.0.0.1:3199/ ，只在本机可访问。',
-  '- start.bat 是备用入口：比起 exe 多一个控制台窗口，方便看报错。',
+  '- start.bat 是备用入口：双击后同样在后台启动面板（不留黑窗口）。',
   '',
   '【常用】',
   `- 桥接控制台：http://127.0.0.1:<consolePort>?token=<consoleToken>（默认端口 ${3100}）`,

@@ -23,6 +23,7 @@ const ROOT = path.resolve(APP_DIR, '..');
 const CONFIG_PATH = process.env.QQ_BOT_CONFIG || path.join(ROOT, 'config.json');
 const STATE_DIR = path.join(ROOT, 'state');
 const BRIDGE_LOG = path.join(STATE_DIR, 'bridge.log');
+const UI_LOG = path.join(STATE_DIR, 'ui.log');
 const SNOWLUMA_LOG = path.join(STATE_DIR, 'snowluma.log');
 const SNOWLUMA_DIR = path.join(ROOT, 'snowluma');
 const PIDS_FILE = path.join(STATE_DIR, 'ui-pids.json');
@@ -527,10 +528,14 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true, ...(await status()) });
       }
       if (req.method === 'GET' && sub === 'logs') {
-        const which = url.searchParams.get('which') === 'snowluma' ? 'snowluma' : 'bridge';
+        // bridge=机器人的桥接日志；snowluma=网关日志；ui=面板自己的启动/操作日志。
+        // 三个来源都在面板里看，用户不用再去开黑窗口。
+        const want = String(url.searchParams.get('which') ?? '');
+        const which = want === 'snowluma' ? 'snowluma' : want === 'ui' ? 'ui' : 'bridge';
         const count = Math.min(400, Math.max(20, Number(url.searchParams.get('tail') ?? 120)));
         const extra = which === 'snowluma' ? logs.snowluma.join('').split(/\r?\n/).filter(Boolean) : [];
-        const lines = which === 'snowluma' && extra.length ? extra.slice(-count) : tailLines(which === 'snowluma' ? SNOWLUMA_LOG : BRIDGE_LOG, count);
+        const file = which === 'snowluma' ? SNOWLUMA_LOG : which === 'ui' ? UI_LOG : BRIDGE_LOG;
+        const lines = which === 'snowluma' && extra.length ? extra.slice(-count) : tailLines(file, count);
         return json(res, 200, { ok: true, which, lines });
       }
       if (req.method === 'GET' && sub === 'live') {
