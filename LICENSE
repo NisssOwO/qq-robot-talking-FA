@@ -1,0 +1,54 @@
+MIT License
+
+Copyright (c) 2026 Derpyu520 and qq-bridge / FA contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+## 第三方组件与边界（不是许可证的一部分，但请一并阅读）
+
+上面这份 MIT 只覆盖**本仓库自己的代码**。它不覆盖下列第三方组件，它们各自适用原许可：
+
+| 组件 | 许可 | 本仓库内的关系 |
+| --- | --- | --- |
+| Node.js（`node.exe`） | MIT | 发布包内附带，按其自身许可分发 |
+| [SnowLuma](https://github.com/SnowLuma/SnowLuma)（QQ 网关） | 源码可见**非商业**许可（非 OSI 开源） | **本仓库不含其源码或二进制**；它由使用者自行取得并遵守其许可。程序只通过 OneBot v11 协议与它通信，并只读其 `config/onebot_*.json` 以发现 token |
+| `@snowluma/sdk`、`@snowluma/mcp`（npm） | 声明为 `SEE LICENSE IN LICENSE`，但包内没有 LICENSE 文件 | 作为 npm 依赖使用；`postinstall` 会对本地安装副本做一次机械修补（只补 `.js` 扩展名），**不会进入本仓库** |
+| `@modelcontextprotocol/sdk`、`js-yaml`、`zod` 等 | MIT / ISC | 见各自包内 LICENSE |
+| Fish Audio（语音合成） | 商业服务条款 | 使用者自备 API Key 并遵守其条款 |
+| 角色卡 / 角色包 / `world.json` | 不适用 MIT | 见 `README.md` 的「角色包与二次创作声明」，版权归原权利方 |
+
+### 使用风险提示
+
+- SnowLuma 是独立第三方项目，与腾讯公司及 QQ **无隶属、合作、授权或背书关系**。
+- 使用非官方协议接入 QQ **可能违反平台服务条款并导致账号受限**，风险自负；建议用小号。
+- 本程序会把 QQ 消息交给大语言模型处理并代替账号发言。**群里其他人的消息也会被一并发送**，
+  请在群里告知成员，或只在自己人的群里使用。
+- 若开启联网搜索，从聊天里提取的词条可能被作为搜索关键词发出。
+
+### 数据出机清单
+
+| 目的地 | 什么数据 | 怎么关 |
+| --- | --- | --- |
+| 模型服务商（你配置的 Base URL） | 消息文本、图片、昵称、上下文 | 换 provider，或不用本程序 |
+| 本地 QQ 网关 | 你发出的消息与动作 | 不接 QQ 就没有这个程序的意义 |
+| 联网搜索（可选） | 搜索关键词、被抓取的页面地址 | 不填搜索 Key，或在面板关掉 |
+
+本程序**不上报任何遥测**：源码中没有 telemetry / analytics 调用。

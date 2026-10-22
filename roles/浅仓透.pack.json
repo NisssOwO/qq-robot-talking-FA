@@ -1,0 +1,33 @@
+{
+  "role": "浅仓透",
+  "roleFile": "roles/浅仓透.md",
+  "voiceId": "db8fb218614745f6b854e24620c33445",
+  "aliases": [
+    "浅仓透",
+    "浅仓",
+    "とおる",
+    "あさくら",
+    "透"
+  ],
+  "dictionary": {
+    "浅倉透": "a0sa1ku0ra0to0o1ru1",
+    "浅倉": "a0sa1ku0ra0",
+    "透です": "to0o1ru1de1su0",
+    "透だよ": "to0o1ru1da0yo0",
+    "透だ": "to0o1ru1da0",
+    "透の": "to0o1ru1no0",
+    "透は": "to0o1ru1wa0",
+    "透も": "to0o1ru1mo0",
+    "透が": "to0o1ru1ga0",
+    "樋口円香": "hi1gu0chi0ma1do0ka0",
+    "樋口": "hi1gu0chi0",
+    "円香": "ma1do0ka0",
+    "福丸小糸": "fuku1ma0ru0koi1to0",
+    "福丸": "fuku1ma0ru0",
+    "小糸": "koi1to0",
+    "市川雛菜": "i0chi1ka0wa0hi1na0na0",
+    "市川": "i0chi1ka0wa0",
+    "雛菜": "hi1na0na0"
+  },
+  "worldName": "浅倉透"
+}

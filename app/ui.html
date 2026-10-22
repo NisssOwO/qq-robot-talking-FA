@@ -1,0 +1,1129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QQ 聊天机器人控制台</title>
+<style>
+  :root {
+    /* 与桥接控制台（public/console.html）同一套设计变量，两个界面看起来是一件东西 */
+    --bg:#f7f8fb; --surface:#fff; --surface-subtle:#fafbfe; --surface-hover:#f5f6fa;
+    --card-border:#e4e9f1; --border:#dfe4ed; --text:#202635; --text-strong:#293044;
+    --text-secondary:#5f6a7d; --muted:#5d6878; --muted-soft:#828da1; --placeholder:#929bad;
+    --accent:#4d6bfe; --accent-hover:#405de5; --accent-soft-bg:#edf1ff; --accent-soft-fg:#405ee6;
+    --accent-border-soft:#c8d4ff; --ok:#1f8a5b; --warn:#b45309; --bad:#c0392b;
+    --mono: ui-monospace,"Cascadia Mono",Consolas,"Noto Sans Mono",monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#15171d; --surface:#1b1e26; --surface-subtle:#20242d; --surface-hover:#252a34;
+      --card-border:#2c313c; --border:#333846; --text:#e7eaf1; --text-strong:#f2f4f9;
+      --text-secondary:#a2abbb; --muted:#98a1b2; --muted-soft:#7d8698; --placeholder:#6f7889;
+      --accent:#7d92ff; --accent-hover:#93a4ff; --accent-soft-bg:#232a44; --accent-soft-fg:#a9b8ff;
+      --accent-border-soft:#3a4468; --ok:#4cc38a; --warn:#e0a458; --bad:#e5776b;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height:100%; margin:0; }
+  body {
+    display:grid; grid-template-columns: 236px 1fr; height:100vh; overflow:hidden;
+    background:var(--bg); color:var(--text);
+    font:14px/1.62 "Segoe UI","Noto Sans SC","PingFang SC",system-ui,-apple-system,sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── 左栏 ───────────────────────────────────────────── */
+  aside {
+    background:var(--surface); border-right:1px solid var(--card-border);
+    padding:22px 14px 16px; display:flex; flex-direction:column; overflow-y:auto;
+  }
+  aside::-webkit-scrollbar { width:0; }
+  .brand { display:flex; align-items:center; gap:10px; padding:0 8px 18px; }
+  .brand-mark {
+    width:30px; height:30px; border-radius:9px; background:var(--accent); color:#fff;
+    display:grid; place-items:center; font-weight:700; font-size:15px; flex:0 0 auto;
+    box-shadow:0 2px 8px color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+  .brand-text b { display:block; font-size:14px; letter-spacing:.01em; color:var(--text-strong); }
+  .brand-text small { display:block; font-size:11px; color:var(--muted-soft); margin-top:1px; }
+
+  .nav-group { font-size:10.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--muted-soft); padding:14px 10px 7px; font-weight:600; }
+  .nav-item {
+    display:flex; align-items:center; gap:9px; width:100%; text-align:left; cursor:pointer;
+    border:1px solid transparent; background:transparent; color:var(--text-secondary);
+    font:inherit; font-size:13px; padding:8px 10px; border-radius:9px; margin-bottom:1px;
+  }
+  .nav-item .ico { width:16px; text-align:center; color:var(--muted-soft); font-size:12px; flex:0 0 auto; }
+  .nav-item:hover { background:var(--surface-hover); color:var(--text); }
+  .nav-item.active {
+    background:var(--accent-soft-bg); color:var(--accent-soft-fg); font-weight:600;
+    border-color:var(--accent-border-soft);
+  }
+  .nav-item.active .ico { color:var(--accent); }
+  .nav-item .badge { margin-left:auto; font-size:10.5px; color:var(--muted-soft); }
+
+  .aside-foot { margin-top:auto; padding:16px 10px 0; border-top:1px solid var(--border); }
+  .aside-foot .dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--muted-soft); margin-right:6px; vertical-align:1px; }
+  .aside-foot .dot.ok { background:var(--ok); }
+  .aside-foot .dot.warn { background:var(--warn); }
+  .aside-foot .dot.bad { background:var(--bad); }
+  .aside-foot span { font-size:11.5px; color:var(--muted); }
+  .aside-foot small { display:block; font-size:10.5px; color:var(--muted-soft); margin-top:3px; }
+
+  /* ── 右侧内容 ───────────────────────────────────────── */
+  main { position:relative; overflow:hidden; }
+  .view { position:absolute; inset:0; overflow:auto; }
+  .view[hidden] { display:none; }
+  .view.pad { padding:26px 30px 40px; }
+  .view > iframe { width:100%; height:100%; border:0; display:block; background:var(--bg); }
+  .view.empty-state { display:grid; place-items:center; color:var(--muted); font-size:13px; text-align:center; padding:40px; }
+
+  .head { margin-bottom:20px; }
+  .eyebrow { font-size:10.5px; letter-spacing:.18em; text-transform:uppercase; color:var(--muted-soft); font-weight:600; }
+  .head h1 { font-size:22px; letter-spacing:-.01em; margin:6px 0 5px; color:var(--text-strong); font-weight:650; }
+  .head p { margin:0; color:var(--text-secondary); font-size:13px; }
+
+  .grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:16px; align-items:start; }
+  .card {
+    background:var(--surface); border:1px solid var(--card-border); border-radius:14px;
+    padding:18px 20px; box-shadow:0 1px 2px rgba(16,24,40,.03);
+  }
+  .card.span2 { grid-column:1 / -1; }
+  .card h2 {
+    font-size:10.5px; letter-spacing:.15em; text-transform:uppercase; color:var(--muted-soft);
+    margin:0 0 14px; font-weight:600;
+  }
+  .metric { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:12px; }
+  .metric > div { padding:12px 14px; border:1px solid var(--border); border-radius:11px; background:var(--surface-subtle); }
+  .metric span { font-size:11.5px; color:var(--muted); display:block; }
+  .metric strong { font-size:15px; color:var(--text-strong); font-weight:650; }
+  .metric small { display:block; font-size:10.5px; color:var(--muted-soft); margin-top:2px; }
+
+  .rowline { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 0; border-bottom:1px dashed var(--border); }
+  .rowline:last-of-type { border-bottom:0; }
+  .rowline .who { display:flex; align-items:center; gap:10px; min-width:0; }
+  .rowline .name { font-size:13.5px; font-weight:600; color:var(--text-strong); }
+  .rowline .meta { font-size:11.5px; color:var(--muted); }
+  .led { width:8px; height:8px; border-radius:50%; background:var(--muted-soft); flex:0 0 auto; box-shadow:0 0 0 3px color-mix(in srgb, var(--muted-soft) 16%, transparent); }
+  .led.ok { background:var(--ok); box-shadow:0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent); }
+  .led.warn { background:var(--warn); box-shadow:0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent); }
+  .led.bad { background:var(--bad); box-shadow:0 0 0 3px color-mix(in srgb, var(--bad) 18%, transparent); }
+
+  button {
+    cursor:pointer; font:inherit; font-size:12.5px; border-radius:9px; padding:7px 13px;
+    border:1px solid var(--border); background:var(--surface); color:var(--text); white-space:nowrap;
+  }
+  button:hover:not(:disabled) { border-color:var(--accent-border-soft); color:var(--text-strong); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  button.primary:hover:not(:disabled) { background:var(--accent-hover); border-color:var(--accent-hover); }
+  button.danger { color:var(--bad); border-color:color-mix(in srgb, var(--bad) 32%, var(--border)); }
+  button:disabled { opacity:.42; cursor:default; }
+  .btns { display:flex; gap:7px; flex:0 0 auto; }
+
+  label { display:block; font-size:11.5px; color:var(--muted); margin:13px 0 6px; }
+  label:first-of-type { margin-top:0; }
+  input, textarea {
+    width:100%; padding:8px 11px; border-radius:9px; border:1px solid var(--border);
+    background:var(--surface); color:var(--text); font:inherit; font-size:13px;
+  }
+  input:focus, textarea:focus { outline:0; border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+  textarea { min-height:66px; resize:vertical; font-family:var(--mono); font-size:12px; line-height:1.6; }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .hint { font-size:11px; color:var(--muted-soft); margin-top:5px; }
+  .hint code { font-family:var(--mono); font-size:11px; }
+  .choice {
+    display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text);
+    margin:11px 0 0; cursor:pointer; line-height:1.4;
+  }
+  .choice input[type=radio] { width:auto; flex:0 0 auto; margin:0; accent-color:var(--accent); }
+
+  pre {
+    margin:0; padding:12px 14px; background:var(--surface-subtle); border:1px solid var(--border);
+    border-radius:10px; font-family:var(--mono); font-size:11px; line-height:1.6;
+    max-height:250px; overflow:auto; white-space:pre-wrap; word-break:break-all; color:var(--text-secondary);
+  }
+  .toast { font-size:12px; min-height:17px; margin-top:10px; color:var(--ok); }
+  .toast.err { color:var(--bad); }
+  .steps { margin:12px 0 0; padding-left:17px; color:var(--muted); font-size:12px; }
+  .steps li { margin:2px 0; }
+
+  /* 破坏性操作确认层 */
+  #confirm-mask { position:fixed; inset:0; background:rgba(15,20,32,.36); display:flex; align-items:center; justify-content:center; z-index:9999; }
+  #confirm-mask[hidden] { display:none; }
+  .confirm-box { width:430px; max-width:calc(100vw - 48px); background:var(--surface); border:1px solid var(--card-border); border-radius:14px; padding:22px 22px 18px; box-shadow:0 24px 60px rgba(15,20,32,.22); }
+  .confirm-title { font-size:17px; font-weight:650; margin-bottom:9px; }
+  .confirm-body { color:var(--muted); font-size:13.5px; line-height:1.7; }
+  .confirm-body code { font-family:var(--mono); font-size:12px; background:var(--surface-subtle); padding:1px 5px; border-radius:5px; }
+  .confirm-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; }
+  .confirm-actions button { min-width:84px; }
+</style>
+</head>
+<body>
+
+<aside>
+  <div class="brand">
+    <div class="brand-mark">Q</div>
+    <div class="brand-text"><b>QQ 聊天机器人</b><small>控制台</small></div>
+  </div>
+  <div id="nav"></div>
+  <div class="aside-foot">
+    <span><i class="dot" id="foot-dot"></i><span id="foot-text">检查中…</span></span>
+    <small id="foot-sub">本地运行 · 不经过第三方</small>
+  </div>
+</aside>
+
+<main id="main"></main>
+
+<!-- 破坏性操作的统一确认层：角色包删除、以及控制台里所有「删除/清空/重置」按钮都走这里 -->
+<div id="confirm-mask" hidden>
+  <div class="confirm-box">
+    <div class="confirm-title" id="confirm-title">确认操作</div>
+    <div class="confirm-body" id="confirm-body"></div>
+    <div class="confirm-actions">
+      <button id="confirm-cancel">取消</button>
+      <button class="danger" id="confirm-ok">确认删除</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+const NAV = [
+  { group: '运行', items: [
+    { id: 'status',  label: '启动与状态', ico: '◉', self: true },
+    { id: 'overview', label: '运行总览', ico: '◫' },
+    { id: 'sessions', label: '会话与审批', ico: '☷' }
+  ]},
+  { group: '角色与行为', items: [
+    { id: 'persona',  label: '人格与角色', ico: '◈' },
+    { id: 'rolepack', label: '角色包', ico: '⧉', self: true },
+    { id: 'quiet',    label: '静默时间', ico: '◔', self: true },
+    { id: 'social-v2', label: '二代仿真', ico: '◆' },
+    { id: 'social-v1', label: '一代仿真', ico: '◇' },
+    { id: 'slang',    label: '黑话词库', ico: '▤' }
+  ]},
+  { group: '管理', items: [
+    { id: 'model',    label: '模型与密钥', ico: '⚙', self: true },
+    { id: 'allow',    label: '对话范围', ico: '👥', self: true },
+    { id: 'close',    label: '关窗行为', ico: '⏻', self: true },
+    { id: 'usage',    label: '令牌与花费', ico: '◧' },
+    { id: 'access',   label: '访问与安全', ico: '⊙' },
+    { id: 'operations', label: '调试与运维', ico: '⌘' },
+    { id: 'reference',  label: '工具参考', ico: 'ⓘ' }
+  ]}
+];
+
+let botRunning = false;
+let active = 'status';
+let frame = null;      // 只有一个 iframe，复用
+let framePage = '';    // iframe 里当前所在的 console 页面
+
+// ── 导航 ────────────────────────────────────────────────
+for (const g of NAV) {
+  const t = document.createElement('div');
+  t.className = 'nav-group';
+  t.textContent = g.group;
+  $('nav').appendChild(t);
+  for (const it of g.items) {
+    const b = document.createElement('button');
+    b.className = 'nav-item';
+    b.dataset.nav = it.id;
+    b.innerHTML = `<span class="ico">${it.ico}</span><span>${it.label}</span>`;
+    b.onclick = () => go(it.id);
+    $('nav').appendChild(b);
+  }
+}
+
+function head(eyebrow, title, desc) {
+  return `<div class="head"><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p>${desc}</p></div>`;
+}
+
+// ── 自建页：启动与状态 ───────────────────────────────────
+const statusView = document.createElement('section');
+statusView.className = 'view pad';
+statusView.dataset.view = 'status';
+statusView.innerHTML = head('LAUNCHER', '启动与状态', '把网关和机器人拉起来，剩下的都在左边。') + `
+<div class="grid">
+  <div class="card span2" id="live-card" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <i class="led" id="live-led" style="width:13px;height:13px;flex:0 0 13px"></i>
+    <div style="min-width:190px">
+      <div id="live-state" style="font-size:21px;font-weight:650;letter-spacing:.01em;line-height:1.25">—</div>
+      <div class="hint" id="live-sub" style="margin-top:3px">读取机器人状态中…</div>
+    </div>
+    <div id="live-facts" style="margin-left:auto;display:flex;gap:28px;text-align:right;flex-wrap:wrap"></div>
+  </div>
+
+  <div class="card">
+    <h2>进程</h2>
+    <div class="rowline">
+      <div class="who"><i class="led" id="led-gw"></i><div><div class="name">QQ 网关</div><div class="meta" id="meta-gw">检查中…</div></div></div>
+      <div class="btns"><button id="btn-gw-start">启动</button><button id="btn-gw-login">登录页</button></div>
+    </div>
+    <div class="rowline">
+      <div class="who"><i class="led" id="led-bot"></i><div><div class="name">机器人</div><div class="meta" id="meta-bot">检查中…</div></div></div>
+      <div class="btns"><button class="primary" id="btn-bot-start">启动</button><button class="danger" id="btn-bot-stop">停止</button></div>
+    </div>
+    <ol class="steps">
+      <li>网关没起来时点「启动」；第一次需要点「登录页」扫码登录 QQ。</li>
+      <li>QQ 上线后点机器人「启动」，左边那些功能页就都能用了。</li>
+      <li>运行状态在左边「运行总览」和上面那张卡里看，不用一直开着这一页。</li>
+    </ol>
+    <div class="toast" id="toast1"></div>
+  </div>
+
+  <div class="card">
+    <h2>连接</h2>
+    <div class="metric">
+      <div><span>网关 WebUI</span><strong id="m-webui">—</strong><small>:5099</small></div>
+      <div><span>OneBot HTTP</span><strong id="m-http">—</strong><small>:38000</small></div>
+      <div><span>OneBot WS</span><strong id="m-ws">—</strong><small>:38001</small></div>
+      <div><span>控制台</span><strong id="m-console">—</strong><small id="m-console-port">:3100</small></div>
+    </div>
+    <div class="hint" style="margin-top:14px">机器人没启动时，功能页会提示不可用；启动后自动就绪。</div>
+    <div class="toast" id="toast2"></div>
+  </div>
+
+  <div class="card span2">
+    <h2>日志</h2>
+    <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:10px">
+      <div class="btns"><button id="btn-log-bridge">桥接日志</button><button id="btn-log-gw">网关日志</button></div>
+      <button id="btn-log-refresh">刷新</button>
+    </div>
+    <pre id="log">—</pre>
+  </div>
+</div>`;
+$('main').appendChild(statusView);
+
+// ── 自建页：模型与密钥 ─────────────────────────────────
+const modelView = document.createElement('section');
+modelView.className = 'view pad';
+modelView.dataset.view = 'model';
+modelView.innerHTML = head('MODEL / KEYS', '模型与密钥', '机器人要调用好几个外部服务，各自的地址和密钥都在这一页填。保存后重启机器人生效。') + `
+<div class="grid">
+  <div class="card">
+    <h2>语言模型</h2>
+    <div class="two">
+      <div><label>接口地址</label><input id="baseUrl" placeholder="https://api.deepseek.com/v1"></div>
+      <div><label>模型名</label><input id="model" placeholder="deepseek-chat" list="model-list"><datalist id="model-list"></datalist></div>
+    </div>
+    <label>API Key <span class="hint" id="key-mask" style="display:inline"></span></label>
+    <input id="apiKey" type="password" placeholder="留空表示不修改" autocomplete="off">
+    <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+      <button id="btn-fetch-models">获取可用模型</button>
+      <span class="hint" id="models-hint" style="margin:0">用上面填的地址和 key 去问接口</span>
+    </div>
+    <div class="hint">OpenAI 兼容接口都行：DeepSeek 官方、中转站、本地 vLLM。</div>
+  </div>
+  <div class="card">
+    <h2>语音合成</h2>
+    <div class="two">
+      <div><label>接口地址</label><input id="ttsBaseUrl" placeholder="https://api.fish.audio"></div>
+      <div><label>模型名</label><input id="ttsModel" placeholder="s2.1-pro-free"></div>
+    </div>
+    <label>API Key <span class="hint" id="tts-mask" style="display:inline"></span></label>
+    <input id="ttsApiKey" type="password" placeholder="留空表示不修改" autocomplete="off">
+    <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-weight:500">
+      <input type="checkbox" id="ttsEnabled" style="width:auto"> 启用语音合成
+    </label>
+    <div class="hint">音色不在这一页：每个角色的声音写在它的「角色包」里。没写音色的角色不会发声，只打字。</div>
+  </div>
+  <div class="card">
+    <h2>联网搜索</h2>
+    <label>API Key <span class="hint" id="web-mask" style="display:inline"></span></label>
+    <input id="webSearchApiKey" type="password" placeholder="留空表示不修改" autocomplete="off">
+    <label style="margin-top:10px">接口地址</label>
+    <input id="webSearchBaseURL" placeholder="留空用默认">
+    <div class="hint" id="web-env-hint">留空 Key 时回退到环境变量。</div>
+  </div>
+  <div class="card">
+    <h2>网关接入</h2>
+    <div class="two">
+      <div><label>WebSocket 地址</label><input id="wsUrl" placeholder="ws://127.0.0.1:38001"></div>
+      <div><label>HTTP 地址</label><input id="httpUrl" placeholder="http://127.0.0.1:38000"></div>
+    </div>
+    <label>接入令牌 <span class="hint" id="gw-mask" style="display:inline"></span></label>
+    <input id="accessToken" type="password" placeholder="留空表示不修改" autocomplete="off">
+    <div class="hint">默认连本机自带网关，一般不用改。</div>
+  </div>
+  <div class="card span2">
+    <button class="primary" id="btn-save">保存配置</button>
+    <div class="toast" id="toast3"></div>
+  </div>
+</div>`;
+$('main').appendChild(modelView);
+
+// ── 自建页：对话范围 ────────────────────────────────────
+const allowView = document.createElement('section');
+allowView.className = 'view pad';
+allowView.dataset.view = 'allow';
+allowView.innerHTML = head('ALLOW', '对话范围', '机器人只听这些群和好友，别处的消息一律忽略。') + `
+<div class="grid">
+  <div class="card">
+    <h2>群与好友</h2>
+    <label>群号（逗号或换行分隔）</label>
+    <textarea id="groups" placeholder="123456789"></textarea>
+    <label>好友 QQ</label>
+    <textarea id="private" placeholder="1000000001"></textarea>
+    <div class="hint">留空且不打开「空名单放行」时，机器人什么都不回。</div>
+  </div>
+  <div class="card">
+    <h2>管理员与端口</h2>
+    <div class="two">
+      <div><label>管理员 QQ</label><input id="ownerQQ" placeholder="1000000001"></div>
+      <div><label>控制台端口</label><input id="consolePort" placeholder="3100"></div>
+    </div>
+    <label>控制台令牌 <span class="hint" id="ct-mask" style="display:inline"></span></label>
+    <input id="consoleToken" type="password" placeholder="留空表示不修改" autocomplete="off">
+    <div class="hint">管理员可以私聊让机器人改配置；控制台令牌是 /?token= 那串。</div>
+    <div class="toast" id="toast4"></div>
+  </div>
+  <div class="card span2">
+    <button class="primary" id="btn-save2">保存配置</button>
+    <div class="hint" style="margin-top:8px">改完需要重启机器人（启动与状态页 → 停止 → 启动）才生效。</div>
+  </div>
+</div>`;
+$('main').appendChild(allowView);
+
+// ── 自建页：关窗行为 ────────────────────────────────────
+const closeView = document.createElement('section');
+closeView.className = 'view pad';
+closeView.dataset.view = 'close';
+closeView.innerHTML = head('ON CLOSE', '关窗行为', '右上角把控制面板关掉之后，机器人和 QQ 网关要不要继续跑。选完会记住，下次打开还是这个。') + `
+<div class="grid">
+  <div class="card">
+    <h2>关掉窗口时</h2>
+    <label class="choice"><input type="radio" name="closeAction" value="keep" checked> 继续在后台运行（推荐）</label>
+    <div class="hint" style="margin-left:26px;margin-top:2px">窗口关掉，机器人和网关都不停。下次双击 start.bat 只是把窗口重新打开，不会重复起进程。</div>
+    <label class="choice"><input type="radio" name="closeAction" value="stop"> 一并停止机器人和网关</label>
+    <div class="hint" style="margin-left:26px;margin-top:2px">关窗口等于全部关掉，QQ 也会下线；下次要重新点启动、必要时重新扫码。</div>
+    <div class="hint" style="margin-top:16px" id="close-hint">现在是：关窗后继续运行。</div>
+    <div class="toast" id="toast-close"></div>
+  </div>
+
+  <div class="card">
+    <h2>怎么判定「真关了」</h2>
+    <div class="hint" style="margin:0;line-height:1.9">
+      · 点右上角 × 才算关闭，刷新页面不算。<br>
+      · 关窗时页面会发一个信号，服务端挂起 3 秒；这 3 秒里有新页面打开就撤销。<br>
+      · 所以按 F5、或者重新打开面板，都不会把机器人停掉。
+    </div>
+    <div class="hint" style="margin-top:14px">想让机器人一直挂着，就选第一种，然后直接把窗口关掉。</div>
+  </div>
+</div>`;
+$('main').appendChild(closeView);
+
+// ── 自建页：静默时间 ────────────────────────────────────
+const quietView = document.createElement('section');
+quietView.className = 'view pad';
+quietView.dataset.view = 'quiet';
+quietView.innerHTML = head('QUIET HOURS', '静默时间', '到了静默时段，机器人不主动说话、也不等回复；只有管理员 @ 或引用才会回，回完就停。时间按 UTC+8 算，跟电脑时区无关。') + `
+<div class="grid">
+  <div class="card span2" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <i class="led" id="q-led" style="width:12px;height:12px;flex:0 0 12px"></i>
+    <div style="min-width:200px">
+      <div id="q-now" style="font-size:17px;font-weight:600">读取中…</div>
+      <div class="hint" id="q-now-sub" style="margin-top:3px"></div>
+    </div>
+    <div id="q-now-facts" style="margin-left:auto;display:flex;gap:26px;text-align:right;flex-wrap:wrap"></div>
+  </div>
+
+  <div class="card">
+    <h2>工作日</h2>
+    <div class="hint">周一至周五算工作日；法定节假日会自动排除，调休补班日算上班。</div>
+    <div id="q-weekdays" style="display:flex;gap:6px;flex-wrap:wrap;margin:12px 0"></div>
+    <div id="q-workday-rows"></div>
+    <button id="q-add-workday" style="margin-top:4px">+ 加一个时段</button>
+  </div>
+
+  <div class="card">
+    <h2>周末与法定节假日</h2>
+    <div class="hint">默认留空 = 全天正常，不静默。想周末也午休就在下面加时段。</div>
+    <div id="q-offday-rows" style="margin-top:12px"></div>
+    <button id="q-add-offday" style="margin-top:4px">+ 加一个时段</button>
+  </div>
+
+  <div class="card span2">
+    <label style="display:flex;align-items:center;gap:8px;font-weight:500">
+      <input type="checkbox" id="q-enabled" style="width:auto"> 启用静默时段
+    </label>
+    <div class="two" style="margin-top:12px">
+      <div>
+        <label>节假日日历</label>
+        <select id="q-holidays" style="width:100%;padding:9px 11px;border:1px solid var(--card-border);border-radius:9px;background:var(--surface);color:var(--text);font:inherit">
+          <option value="cn">中国大陆（自动拉取法定节假日与调休）</option>
+          <option value="none">不识别节假日，只按星期判断</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-top:16px;display:flex;align-items:center;gap:12px">
+      <button class="primary" id="q-save">保存并立即生效</button>
+      <span class="hint">保存后不用重启机器人。</span>
+    </div>
+    <div class="toast" id="q-toast"></div>
+  </div>
+</div>`;
+$('main').appendChild(quietView);
+
+// ── 自建页：角色包 ──────────────────────────────────────
+const rolepackView = document.createElement('section');
+rolepackView.className = 'view pad';
+rolepackView.dataset.view = 'rolepack';
+rolepackView.innerHTML = head('ROLE PACK', '角色包', '音色、唤醒别名、注音字典、世界观，一个角色一份，跟着角色走。') + `
+<div class="grid">
+  <div class="card">
+    <h2>角色</h2>
+    <div id="rp-list" style="display:flex;flex-direction:column;gap:6px"></div>
+    <div class="hint" style="margin-top:12px">没有包的角色会用 config 里的默认音色和别名兜底。</div>
+  </div>
+  <div class="card">
+    <h2>角色包内容</h2>
+    <label>角色</label>
+    <input id="rp-role" readonly placeholder="先从左边选一个">
+    <label>音色 ID</label>
+    <input id="rp-voice" placeholder="Fish Audio 的 reference_id">
+    <label>唤醒别名（每行一个）</label>
+    <textarea id="rp-aliases" placeholder="七草はづき&#10;叶月"></textarea>
+    <label>注音字典（JSON 对象）</label>
+    <textarea id="rp-dict" placeholder='{ "七草はづき": "na1na0kU0sa1ha1zu0ki0" }' style="min-height:130px;font-family:ui-monospace,monospace;font-size:12.5px"></textarea>
+    <label>世界观名</label>
+    <input id="rp-world" placeholder="对应 world.json 里的名字">
+    <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+      <button class="primary" id="rp-save">保存角色包</button>
+      <button id="rp-fill">用当前配置填充</button>
+      <button class="danger" id="rp-del">删除角色包</button>
+    </div>
+    <div class="toast" id="rp-toast"></div>
+    <div class="hint" style="margin-top:10px">保存后立刻生效：桥接每次合成前都会重新读角色包，不用重启。</div>
+  </div>
+</div>`;
+$('main').appendChild(rolepackView);
+
+// ── 页面切换 ────────────────────────────────────────────
+function go(id) {
+  active = id;
+  for (const b of document.querySelectorAll('.nav-item')) b.classList.toggle('active', b.dataset.nav === id);
+  for (const v of document.querySelectorAll('.view')) v.hidden = v.dataset.view !== id;
+  // NAV 里标了 self 的是面板自己画的页，其余都复用控制台里的 DOM。
+  const isSelf = NAV.some((g) => g.items.some((it) => it.id === id && it.self));
+  if (isSelf) {
+    if (id === 'rolepack') void loadRolePacks();
+    if (id === 'quiet') void loadQuiet();
+    if (id === 'close') void loadCloseSetting();
+    return;
+  }
+  showConsolePage(id);
+}
+
+// 同源 iframe：只借控制台的主内容区，它自己的侧栏/顶栏在这里是多余的，直接从页面里去掉。
+function showConsolePage(page) {
+  if (!botRunning) { showNotice(); return; }
+  if (!frame) {
+    frame = document.createElement('iframe');
+    frame.title = '功能设置';
+    frame.src = '/console/#' + page;
+    framePage = page;
+    frame.onload = () => {
+      try {
+        const doc = frame.contentDocument;
+        const st = doc.createElement('style');
+        st.textContent = `
+          .sidebar{display:none!important}
+          .workspace{margin-left:0!important}
+          .topbar{display:none!important}
+          .skip-link{display:none!important}
+          .bg-decor{display:none!important}
+          main{padding-top:22px!important}
+        `;
+        doc.head.appendChild(st);
+        guardConsoleDeletes(doc, frame.contentWindow);
+        if (typeof frame.contentWindow.setConsolePage === 'function' && framePage) {
+          frame.contentWindow.setConsolePage(framePage, { updateHash: false });
+        }
+      } catch (e) { /* 同源失败就退回普通 iframe 行为 */ }
+    };
+    const view = document.createElement('section');
+    view.className = 'view';
+    view.dataset.view = '__console';
+    view.appendChild(frame);
+    $('main').appendChild(view);
+  }
+  const view = document.querySelector('.view[data-view="__console"]');
+  const notice = document.querySelector('.view[data-view="__notice"]');
+  if (notice) notice.remove();
+  if (view) view.hidden = false;
+  if (framePage !== page) {
+    framePage = page;
+    try { frame.contentWindow.setConsolePage(page, { updateHash: false }); }
+    catch (e) { frame.src = '/console/#' + page; }
+  }
+}
+
+function showNotice() {
+  let view = document.querySelector('.view[data-view="__notice"]');
+  if (!view) {
+    view = document.createElement('section');
+    view.className = 'view empty-state';
+    view.dataset.view = '__notice';
+    view.innerHTML = '机器人还没启动。<br>到「启动与状态」把它启动起来，这里就是它的完整设置页。';
+    $('main').appendChild(view);
+  }
+  for (const v of document.querySelectorAll('.view')) v.hidden = v.dataset.view !== '__notice';
+}
+
+// ── 面板接口 ────────────────────────────────────────────
+async function api(path, options) {
+  const res = await fetch('/panel/api/' + path, options);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+function toast(id, text, isErr) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = isErr ? 'toast err' : 'toast';
+}
+
+// ── 破坏性操作确认层 ────────────────────────────────────
+// 原生 confirm 不够用：拦不住 iframe 里的按钮，也说不清「删的到底是哪个文件」。
+// 所以统一走这里：默认焦点在「取消」，确认按钮还要等 1.2 秒才可点，防手滑连点。
+let confirmResolve = null;
+let confirmArmTimer = null;
+
+function askConfirm(options) {
+  return new Promise(function (resolve) {
+    confirmResolve = resolve;
+    $('confirm-title').textContent = options.title || '确认操作';
+    $('confirm-body').innerHTML = options.body || '';
+    $('confirm-ok').textContent = options.okText || '确认删除';
+    $('confirm-ok').disabled = true;
+    $('confirm-mask').hidden = false;
+    $('confirm-cancel').focus();
+    clearTimeout(confirmArmTimer);
+    confirmArmTimer = setTimeout(function () { $('confirm-ok').disabled = false; }, 1200);
+  });
+}
+
+function closeConfirm(ok) {
+  clearTimeout(confirmArmTimer);
+  $('confirm-mask').hidden = true;
+  const fn = confirmResolve;
+  confirmResolve = null;
+  if (fn) fn(!!ok);
+}
+
+$('confirm-cancel').onclick = () => closeConfirm(false);
+$('confirm-ok').onclick = () => closeConfirm(true);
+document.addEventListener('keydown', function (e) {
+  if (!$('confirm-mask').hidden && e.key === 'Escape') closeConfirm(false);
+});
+
+// 控制台里的「删除/清空/重置」按钮也接上同一套确认：
+// 用捕获阶段拦下点击，确认后再放行，并把它自己那句 window.confirm 暂时放行（避免连弹两次）。
+function guardConsoleDeletes(doc, win) {
+  if (doc.__confirmGuarded) return;
+  doc.__confirmGuarded = true;
+  doc.addEventListener('click', function (event) {
+    const btn = event.target && event.target.closest ? event.target.closest('button, a') : null;
+    if (!btn) return;
+    const label = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!label || !/删除|移除|清空|重置|撤销/.test(label)) return;
+    if (btn.dataset.confirmBypass === '1') { delete btn.dataset.confirmBypass; return; }
+    event.preventDefault();
+    event.stopPropagation();
+    askConfirm({
+      title: '确认执行「' + label + '」？',
+      body: '这个操作不可撤销。确认后立即执行。',
+      okText: '确认执行'
+    }).then(function (ok) {
+      if (!ok) return;
+      btn.dataset.confirmBypass = '1';
+      const realConfirm = win.confirm;
+      win.confirm = function () { return true; };
+      try { btn.click(); } finally { win.confirm = realConfirm; }
+    });
+  }, true);
+}
+function led(id, state) { const e = $(id); if (e) e.className = 'led ' + (state || ''); }
+
+async function refreshStatus() {
+  try {
+    const s = await api('status');
+    const gw = s.snowluma || {};
+    led('led-gw', gw.onebotWs ? 'ok' : gw.webui ? 'warn' : '');
+    $('meta-gw').textContent = gw.onebotWs ? 'QQ 已在线' : gw.webui ? '在跑，QQ 未登录' : '未运行';
+    $('btn-gw-start').disabled = !!gw.running;
+
+    const bot = s.bot || {};
+    botRunning = !!bot.running;
+    led('led-bot', botRunning ? 'ok' : '');
+    $('meta-bot').textContent = botRunning ? '运行中' : '未运行';
+    $('btn-bot-start').disabled = botRunning;
+    $('btn-bot-stop').disabled = !botRunning;
+
+    $('foot-dot').className = 'dot ' + (botRunning && gw.onebotWs ? 'ok' : gw.running ? 'warn' : '');
+    $('foot-text').textContent = botRunning ? (gw.onebotWs ? '运行中' : '机器人已启动，QQ 未上线') : '未启动';
+
+    const p = (v) => (v ? '<span style="color:var(--ok)">在线</span>' : '<span style="color:var(--muted-soft)">离线</span>');
+    $('m-webui').innerHTML = p(gw.webui);
+    $('m-http').innerHTML = p(gw.onebotHttp);
+    $('m-ws').innerHTML = p(gw.onebotWs);
+    $('m-console').innerHTML = p(botRunning);
+    if (s.config) {
+      $('m-console-port').textContent = ':' + (s.config.consolePort || 3100);
+      if (!$('baseUrl').value) $('baseUrl').value = s.config.baseUrl || '';
+      if (!$('model').value) $('model').value = s.config.model || '';
+      if (!$('groups').value) $('groups').value = (s.config.groups || []).join('\n');
+      if (!$('private').value) $('private').value = (s.config.private || []).join('\n');
+      if (!$('consolePort').value) $('consolePort').value = s.config.consolePort || 3100;
+      const tts = s.config.tts || {};
+      if (!$('ttsBaseUrl').value) $('ttsBaseUrl').value = tts.baseUrl || '';
+      if (!$('ttsModel').value) $('ttsModel').value = tts.model || '';
+      $('ttsEnabled').checked = tts.enabled !== false;
+      const web = s.config.webSearch || {};
+      if (!$('webSearchBaseURL').value) $('webSearchBaseURL').value = web.baseURL || '';
+      $('web-env-hint').textContent = web.apiKeyEnv
+        ? `留空 Key 时回退到环境变量 ${web.apiKeyEnv}。`
+        : '留空 Key 时回退到环境变量。';
+      const gate = s.config.gateway || {};
+      if (!$('wsUrl').value) $('wsUrl').value = gate.wsUrl || '';
+      if (!$('httpUrl').value) $('httpUrl').value = gate.httpUrl || '';
+
+      $('key-mask').textContent = s.config.hasKey ? '（已设置，留空不改）' : '（未设置）';
+      $('tts-mask').textContent = tts.hasKey ? '（已设置，留空不改）' : '（未设置）';
+      $('web-mask').textContent = web.hasKey ? '（已设置，留空不改）' : '（未设置）';
+      $('gw-mask').textContent = gate.hasToken ? '（已设置，留空不改）' : '（未设置）';
+      $('ct-mask').textContent = s.config.hasConsoleToken ? '（已设置，留空不改）' : '（未设置）';
+    }
+
+    // 从「未启动」变成「已启动」时，把当前功能页的提示换掉
+    if (botRunning && !NAV.some((g) => g.items.some((it) => it.id === active && it.self))) showConsolePage(active);
+    void loadLive();
+  } catch (e) {
+    $('meta-gw').textContent = e.message;
+  }
+}
+
+// ── 机器人状态卡：静默 / 观察 / 潜水 / 思考中 ────────────────
+function fmtClock(ms) {
+  const d = new Date(ms);
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+function fmtAgo(ms) {
+  if (!ms) return '—';
+  const diff = Date.now() - ms;
+  if (diff < 60000) return '刚刚';
+  if (diff < 3600000) return Math.floor(diff / 60000) + ' 分钟前';
+  if (diff < 86400000) return Math.floor(diff / 3600000) + ' 小时前';
+  return Math.floor(diff / 86400000) + ' 天前';
+}
+const WAKE_REASON = {
+  atMention: '被 @', question: '被提问', poke: '拍一拍', proactiveCheck: '主动搭话',
+  replyCheck: '等回复', admin: '手动', nameMention: '叫名字', probability: '随机醒', anyMessage: '新消息'
+};
+
+// 判断顺序就是「它现在最该被理解成什么状态」：暂停 > 正在干活 > 静默 > 观察/潜水 > 待命。
+function liveVerdict(d) {
+  if (!d || d.ok === false) return { text: '未运行', cls: '', sub: '机器人没启动，或者控制台连不上。' };
+  if (d.paused) return { text: '已暂停', cls: 'warn', sub: '二代 AI 已暂停：不主动说话，也不回消息。' };
+  const conv = (d.conversations || [])[0] || null;
+  if ((d.busyKeys || []).length) {
+    return { text: '思考中', cls: 'ok', sub: '正在读消息、组织回复' + (conv ? '（' + conv.key + '）' : '') + '。' };
+  }
+  const q = d.quiet || {};
+  if (q.state && q.state !== 'normal') {
+    return { text: '静默中', cls: 'warn', sub: (q.reason || '静默时段') + '（' + (q.window || '—') + '）；到点自动恢复。' };
+  }
+  if (!conv) return { text: '待命', cls: 'ok', sub: '还没跟任何人聊过，等消息。' };
+  if (conv.observing) return { text: '观察中', cls: 'ok', sub: '沉睡前在等对方有没有下文，没人说话就收尾。' };
+  if (conv.pendingWake) return { text: '准备唤醒', cls: 'ok', sub: '收到消息了，合并窗口快到点。' };
+  if (conv.sleeping) {
+    return { text: '潜水', cls: '', sub: fmtClock(conv.sleepUntil) + ' 之后醒来（约 ' + Math.max(1, Math.round((conv.sleepUntil - Date.now()) / 60000)) + ' 分钟）。' };
+  }
+  if (conv.wakeMode === 'diving') return { text: '待唤醒', cls: '', sub: '已进入潜水，有人叫它就会醒。' };
+  return { text: '待命', cls: 'ok', sub: '在线，等消息。' };
+}
+
+async function loadLive() {
+  let d = null;
+  try { d = await api('live'); } catch { d = { ok: false }; }
+  const v = liveVerdict(d);
+  $('live-state').textContent = v.text;
+  $('live-sub').textContent = v.sub;
+  $('live-led').className = 'led ' + v.cls;
+  const conv = (d && d.ok !== false && (d.conversations || [])[0]) || null;
+  const facts = [
+    ['会话', conv ? conv.key.replace('group:', '群 ').replace('private:', '好友 ') : '—'],
+    ['未读', conv ? String(conv.unread ?? 0) : '—'],
+    ['上次唤醒', conv ? (WAKE_REASON[conv.lastWakeReason] || conv.lastWakeReason || '—') : '—'],
+    ['上次说话', conv ? fmtAgo(conv.lastAiReplyAt) : '—']
+  ];
+  $('live-facts').innerHTML = facts.map(function (pair) {
+    return '<div><div class="hint" style="margin:0">' + pair[0] + '</div><div style="font-weight:600;margin-top:2px">' + pair[1] + '</div></div>';
+  }).join('');
+}
+
+async function loadLogs() {
+  try {
+    const data = await api('logs?which=' + logWhich + '&tail=140');
+    const box = $('log');
+    box.textContent = (data.lines || []).join('\n') || '（还没有日志）';
+    box.scrollTop = box.scrollHeight;
+  } catch (e) { $('log').textContent = '读取失败：' + e.message; }
+}
+
+let logWhich = 'bridge';
+
+$('btn-gw-start').onclick = async () => {
+  try { await api('snowluma/start', { method: 'POST' }); toast('toast1', '网关启动中，等几秒…'); } catch (e) { toast('toast1', e.message, true); }
+  setTimeout(refreshStatus, 1500);
+};
+$('btn-gw-login').onclick = async () => {
+  try { const r = await api('open-webui', { method: 'POST' }); toast('toast1', r.ok ? '已打开登录窗口' : '没找到浏览器，手动开 http://127.0.0.1:5099/'); } catch (e) { toast('toast1', e.message, true); }
+};
+$('btn-bot-start').onclick = async () => {
+  try { await api('bot/start', { method: 'POST' }); toast('toast1', '机器人启动中…'); } catch (e) { toast('toast1', e.message, true); }
+  setTimeout(refreshStatus, 1600);
+};
+$('btn-bot-stop').onclick = async () => {
+  try { await api('bot/stop', { method: 'POST' }); toast('toast1', '已停止'); } catch (e) { toast('toast1', e.message, true); }
+  setTimeout(refreshStatus, 900);
+};
+// 两个自建页共用同一份表单：保存时总是提交全部字段，避免只改一部分把别的键清掉。
+async function saveAll(btnId, toastId) {
+  const btn = $(btnId);
+  btn.disabled = true;
+  try {
+    await api('config', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        baseUrl: $('baseUrl').value, model: $('model').value, apiKey: $('apiKey').value,
+        ttsBaseUrl: $('ttsBaseUrl').value, ttsModel: $('ttsModel').value,
+        ttsApiKey: $('ttsApiKey').value, ttsEnabled: $('ttsEnabled').checked,
+        webSearchApiKey: $('webSearchApiKey').value, webSearchBaseURL: $('webSearchBaseURL').value,
+        wsUrl: $('wsUrl').value, httpUrl: $('httpUrl').value, accessToken: $('accessToken').value,
+        groups: $('groups').value, private: $('private').value,
+        ownerQQ: $('ownerQQ').value, consolePort: $('consolePort').value,
+        consoleToken: $('consoleToken').value
+      })
+    });
+    for (const id of ['apiKey', 'ttsApiKey', 'webSearchApiKey', 'accessToken', 'consoleToken']) $(id).value = '';
+    toast(toastId, '已保存');
+  } catch (e) { toast(toastId, e.message, true); }
+  finally { btn.disabled = false; }
+}
+// ── 角色包 ───────────────────────────────────────────────
+let rpState = { roles: [], current: '', defaults: {} };
+
+function pickRole(name) {
+  const item = rpState.roles.find((r) => r.name === name) || { name };
+  $('rp-role').value = name;
+  $('rp-voice').value = item.voiceId || '';
+  $('rp-aliases').value = (item.aliases || []).join('\n');
+  $('rp-dict').value = item.dictionary ? JSON.stringify(item.dictionary, null, 2) : '';
+  $('rp-world').value = item.worldName || '';
+  $('rp-toast').textContent = item.hasPack
+    ? '已加载「' + name + '」的角色包（' + (item.dictionaryCount || 0) + ' 条注音'
+      + (item.voiceId ? '，有音色' : '，**没写音色 → 这个角色不会发语音**') + '）'
+    : '「' + name + '」还没有角色包：填完点保存就会生成；在此之前它不会发语音';
+  $('rp-del').disabled = !item.hasPack;
+  for (const b of document.querySelectorAll('#rp-list button')) b.classList.toggle('primary', b.dataset.role === name);
+}
+
+async function loadRolePacks() {
+  try {
+    const r = await api('rolepacks');
+    rpState = { roles: r.roles || [], current: r.currentRole || '', defaults: r.configDefaults || {} };
+    $('rp-list').innerHTML = rpState.roles.map(function (item) {
+      return '<button data-role="' + item.name + '" style="text-align:left">' + item.name
+        + ' <span class="hint" style="margin:0">' + (item.hasPack ? (item.dictionaryCount || 0) + ' 词' : '无包') + '</span></button>';
+    }).join('');
+    for (const b of document.querySelectorAll('#rp-list button')) b.onclick = function () { pickRole(b.dataset.role); };
+    const first = rpState.roles.some((x) => x.name === rpState.current) ? rpState.current : (rpState.roles[0] || {}).name;
+    if (first) pickRole(first);
+  } catch (e) {
+    $('rp-toast').textContent = '读取失败：' + e.message;
+  }
+}
+
+$('rp-fill').onclick = function () {
+  const d = rpState.defaults || {};
+  if (!$('rp-voice').value && d.voiceId) $('rp-voice').value = d.voiceId;
+  if (!$('rp-aliases').value && Array.isArray(d.aliases) && d.aliases.length) $('rp-aliases').value = d.aliases.join('\n');
+  if (!$('rp-world').value) $('rp-world').value = $('rp-role').value;
+  $('rp-toast').textContent = '已用当前配置填充，再点「保存角色包」写入';
+};
+
+$('rp-save').onclick = async function () {
+  const role = $('rp-role').value;
+  if (!role) { $('rp-toast').textContent = '先从左边选一个角色'; return; }
+  let dict = {};
+  const raw = $('rp-dict').value.trim();
+  if (raw) {
+    try { dict = JSON.parse(raw); } catch (e) { $('rp-toast').textContent = '注音字典不是合法 JSON：' + e.message; return; }
+  }
+  try {
+    await api('rolepack', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        role,
+        voiceId: $('rp-voice').value,
+        aliases: $('rp-aliases').value,
+        dictionary: dict,
+        worldName: $('rp-world').value
+      })
+    });
+    await loadRolePacks();
+    $('rp-toast').textContent = '已保存「' + role + '」的角色包，立即生效';
+  } catch (e) { $('rp-toast').textContent = '保存失败：' + e.message; }
+};
+
+$('rp-del').onclick = async function () {
+  const role = $('rp-role').value;
+  if (!role) { $('rp-toast').textContent = '先从左边选一个角色'; return; }
+  const ok = await askConfirm({
+    title: '删除「' + role + '」的角色包？',
+    body: '会删掉 <code>roles/' + role + '.pack.json</code>。<br>'
+      + '删掉之后这个角色会回退到 config 里的默认音色、别名和注音字典，<b>声音会变</b>。<br>'
+      + '角色卡 <code>roles/' + role + '.md</code> 不受影响，随时可以重新生成角色包。',
+    okText: '确认删除'
+  });
+  if (!ok) return;
+  try {
+    await api('rolepack', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ role, remove: true })
+    });
+    await loadRolePacks();
+    $('rp-toast').textContent = '已删除「' + role + '」的角色包';
+  } catch (e) { $('rp-toast').textContent = '删除失败：' + e.message; }
+};
+
+$('btn-fetch-models').onclick = async () => {
+  const btn = $('btn-fetch-models');
+  btn.disabled = true;
+  $('models-hint').textContent = '正在拉取…';
+  try {
+    const r = await api('models', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ baseUrl: $('baseUrl').value, apiKey: $('apiKey').value })
+    });
+    const list = r.models || [];
+    $('model-list').innerHTML = list.map(function (m) {
+      return '<option value="' + String(m).replace(/"/g, '&quot;') + '"></option>';
+    }).join('');
+    $('models-hint').textContent = list.length
+      ? list.length + ' 个模型可以在「模型名」里选（' + r.ms + 'ms）'
+      : '接口返回了空列表';
+    if (list.length && !$('model').value) $('model').value = list[0];
+  } catch (e) {
+    $('models-hint').textContent = '失败：' + e.message;
+  } finally { btn.disabled = false; }
+};
+
+$('btn-save').onclick = () => saveAll('btn-save', 'toast3');
+$('btn-save2').onclick = () => saveAll('btn-save2', 'toast4');
+$('btn-log-bridge').onclick = () => { logWhich = 'bridge'; loadLogs(); };
+$('btn-log-gw').onclick = () => { logWhich = 'snowluma'; loadLogs(); };
+$('btn-log-refresh').onclick = () => loadLogs();
+
+// ── 静默时间 ────────────────────────────────────────────
+const WEEKDAY_NAMES = ['一', '二', '三', '四', '五', '六', '日'];
+
+// 桥接控制台的接口不在 /panel/api 下，走面板的同源反向代理：路径原样，令牌由服务端注入。
+async function consoleFetch(path, options) {
+  const res = await fetch(path, options);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+
+function quietRow(pair) {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+  const start = document.createElement('input');
+  start.type = 'time';
+  start.value = (pair && pair[0]) || '09:00';
+  start.style.width = '112px';
+  const dash = document.createElement('span');
+  dash.textContent = '—';
+  dash.style.color = 'var(--muted-soft)';
+  const end = document.createElement('input');
+  end.type = 'time';
+  end.value = (pair && pair[1]) || '18:00';
+  end.style.width = '112px';
+  const del = document.createElement('button');
+  del.textContent = '删除';
+  del.style.marginLeft = 'auto';
+  del.onclick = function () { wrap.remove(); };
+  wrap.append(start, dash, end, del);
+  return wrap;
+}
+
+function renderQuietRows(kind, windows) {
+  const box = $(kind === 'workday' ? 'q-workday-rows' : 'q-offday-rows');
+  box.innerHTML = '';
+  for (const pair of windows) box.appendChild(quietRow(pair));
+}
+
+function renderQuietWeekdays(selected) {
+  const box = $('q-weekdays');
+  box.innerHTML = '';
+  for (let d = 1; d <= 7; d += 1) {
+    const b = document.createElement('button');
+    b.textContent = '周' + WEEKDAY_NAMES[d - 1];
+    b.dataset.day = String(d);
+    if ((selected || []).includes(d)) b.classList.add('primary');
+    b.onclick = function () { b.classList.toggle('primary'); };
+    box.appendChild(b);
+  }
+}
+
+function collectQuiet() {
+  const read = function (kind) {
+    return [...document.querySelectorAll('#q-' + kind + '-rows > div')].map(function (row) {
+      const inputs = row.querySelectorAll('input[type="time"]');
+      return [inputs[0] ? inputs[0].value : '', inputs[1] ? inputs[1].value : ''];
+    }).filter(function (pair) { return pair[0] && pair[1] && pair[0] !== pair[1]; });
+  };
+  return {
+    enabled: $('q-enabled').checked,
+    holidays: $('q-holidays').value,
+    workday: {
+      weekdays: [...document.querySelectorAll('#q-weekdays button')]
+        .filter(function (b) { return b.classList.contains('primary'); })
+        .map(function (b) { return Number(b.dataset.day); }),
+      windows: read('workday')
+    },
+    offday: { windows: read('offday') }
+  };
+}
+
+function renderQuietStatus(s) {
+  if (!s || typeof s !== 'object') { $('q-now').textContent = '读不到状态'; return; }
+  const fmtWin = function (w) {
+    if (!Array.isArray(w) || w.length !== 2) return '无';
+    const hm = function (m) { return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); };
+    return hm(w[0]) + '–' + hm(w[1]);
+  };
+  const quiet = s.state === 'quiet';
+  const override = s.state === 'override';
+  $('q-led').className = 'led ' + (quiet || override ? 'warn' : 'ok');
+  $('q-now').textContent = quiet
+    ? '静默中'
+    : override
+      ? '临时覆盖中（被动模式）'
+      : (s.enabled === false ? '静默功能已关闭' : '正常');
+  const dayKind = s.workday ? '工作日' : '周末与法定节假日';
+  const tail = quiet && s.until ? '，' + fmtClock(s.until) + ' 结束' : '';
+  $('q-now-sub').textContent = '今天算「' + dayKind + '」' + (s.holiday ? '（' + s.holiday + '）' : '')
+    + '，按这一套时段判断' + tail + '。';
+  const facts = [
+    ['今天', s.date + ' 周' + WEEKDAY_NAMES[(new Date(s.date + 'T12:00:00+08:00').getDay() + 6) % 7]],
+    ['本地时间', s.localTime],
+    ['当前时段', fmtWin(s.window)],
+    ['已抑制', String(s.suppressed == null ? 0 : s.suppressed)]
+  ];
+  $('q-now-facts').innerHTML = facts.map(function (pair) {
+    return '<div><div class="hint" style="margin:0">' + pair[0] + '</div><div style="font-weight:600;margin-top:2px">' + pair[1] + '</div></div>';
+  }).join('');
+}
+
+async function loadQuiet() {
+  try {
+    const s = await consoleFetch('/api/quiet-hours');
+    $('q-enabled').checked = s.enabled !== false;
+    $('q-holidays').value = s.holidays === 'none' ? 'none' : 'cn';
+    renderQuietWeekdays(s.weekdays || [1, 2, 3, 4, 5]);
+    renderQuietRows('workday', s.workdayWindows || []);
+    renderQuietRows('offday', s.offdayWindows || []);
+    renderQuietStatus(s);
+  } catch (e) {
+    $('q-now').textContent = '读取失败：' + e.message;
+  }
+}
+
+$('q-add-workday').onclick = function () { $('q-workday-rows').appendChild(quietRow(['09:00', '12:00'])); };
+$('q-add-offday').onclick = function () { $('q-offday-rows').appendChild(quietRow(['09:00', '12:00'])); };
+$('q-save').onclick = async function () {
+  const btn = $('q-save');
+  btn.disabled = true;
+  try {
+    const s = await consoleFetch('/api/quiet-hours/config', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(collectQuiet())
+    });
+    renderQuietStatus(s);
+    toast('q-toast', '已保存，立即生效');
+  } catch (e) { toast('q-toast', e.message, true); }
+  finally { btn.disabled = false; }
+};
+
+// ── 关闭窗口时的行为 ────────────────────────────────────
+const CLOSE_HINT = {
+  keep: '现在是：关窗后继续在后台运行，机器人和网关都不停。',
+  stop: '现在是：关窗后一并停止机器人和网关。'
+};
+function renderCloseHint(value) {
+  $('close-hint').textContent = CLOSE_HINT[value] || CLOSE_HINT.keep;
+}
+async function loadCloseSetting() {
+  try {
+    const s = await api('settings');
+    const value = s.closeAction === 'stop' ? 'stop' : 'keep';
+    document.querySelectorAll('input[name="closeAction"]').forEach(function (el) {
+      el.checked = el.value === value;
+    });
+    renderCloseHint(value);
+  } catch (e) {
+    renderCloseHint('keep');
+  }
+}
+document.querySelectorAll('input[name="closeAction"]').forEach(function (el) {
+  el.onchange = async function () {
+    try {
+      await api('settings', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ closeAction: el.value })
+      });
+      renderCloseHint(el.value);
+      toast('toast-close', el.value === 'stop' ? '已记住：关窗时一并停止' : '已记住：关窗后继续运行');
+    } catch (e) {
+      toast('toast-close', '保存失败：' + e.message, true);
+    }
+  };
+});
+
+// 关窗时用 beacon 通知服务端；服务端挂 3 秒，期间有新页面加载（下面的 ping）就取消，
+// 所以刷新不会误停。点右上角 × 才是真关闭。
+fetch('/panel/api/ping').catch(function () {});
+function notifyWindowClosed() {
+  try { navigator.sendBeacon('/panel/api/window-closed'); } catch (e) { /* 忽略 */ }
+}
+window.addEventListener('pagehide', notifyWindowClosed);
+window.addEventListener('beforeunload', notifyWindowClosed);
+
+void loadCloseSetting();
+// 支持 /#quiet 这种直接落在某一页的地址；不认识的 hash 就回到启动页。
+const initialPage = (location.hash || '').replace('#', '').trim();
+if (initialPage && NAV.some(function (g) { return g.items.some(function (it) { return it.id === initialPage; }); })) {
+  go(initialPage);
+} else {
+  go('status');
+}
+refreshStatus();
+loadLogs();
+setInterval(refreshStatus, 2500);
+setInterval(() => { if (active === 'status') loadLogs(); }, 4000);
+</script>
+</body>
+</html>

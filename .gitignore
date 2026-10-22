@@ -1,0 +1,18 @@
+# 运行时与环境（绝不提交）
+node_modules/
+dist/
+state/
+state-live/
+state-smoke/
+audio/
+logs/
+config.json
+*.log
+*.bak-*
+*.bak
+node.exe
+QQ聊天机器人.exe
+snowluma/
+SnowLuma-*/
+启动全部.bat
+_snowluma-catalog.json

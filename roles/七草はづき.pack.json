@@ -1,0 +1,27 @@
+{
+  "role": "七草はづき",
+  "roleFile": "roles/七草はづき.md",
+  "voiceId": "a061289170654e1a9dda177a28764651",
+  "aliases": [
+    "七草叶月",
+    "叶月",
+    "はづき",
+    "七草はづき",
+    "はづきさん"
+  ],
+  "dictionary": {
+    "七草はづき": "na1na0kU0sa1ha1zu0ki0",
+    "七草にちか": "na1na0kU0sa1nichi1ka0",
+    "七草": "na1na0kU0sa1",
+    "桑山千雪": "ku0wa1ya0ma0chi0yu1ki1",
+    "桑山": "ku0wa1ya0ma0",
+    "千雪": "chi0yu1ki1",
+    "天井努": "a0ma1i1tsU0to1mu1",
+    "天井社長": "a0ma1i1sha0cho1o1",
+    "283プロダクション": "tsu0ba1sa1pu1ro0da0kU0sho0N0",
+    "283プロ": "tsu0ba1sa1pu0ro0",
+    "SHHis": "shi1i0zu0",
+    "CoMETIK": "ko0me1ti1clku0"
+  },
+  "worldName": "七草はづき"
+}
