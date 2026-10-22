@@ -256,6 +256,17 @@ statusView.innerHTML = head('LAUNCHER', '启动与状态', '把网关和机器�
     <div id="live-facts" style="margin-left:auto;display:flex;gap:28px;text-align:right;flex-wrap:wrap"></div>
   </div>
 
+  <div class="card span2" id="gw-missing" hidden style="border-color:#f0c9a8;background:#fff8f1">
+    <h2 style="color:#a35b1f">还差一步：装 QQ 网关</h2>
+    <p class="hint" style="margin:6px 0 10px">这个目录里没有 <code>snowluma\</code>。本程序不带网关（它是另一个项目、另一份许可），QQ 登录要靠它。</p>
+    <ol class="steps">
+      <li>打开 <a href="https://github.com/SnowLuma/SnowLuma" target="_blank" rel="noreferrer">SnowLuma 的 GitHub 项目</a>，进 Releases 下载最新的 Windows 版压缩包。</li>
+      <li>解压，把解出来的文件夹<b>改名为 snowluma</b>。</li>
+      <li>把它放到本程序目录下，和 <code>node.exe</code>、<code>QQ聊天机器人.exe</code> 同一层。</li>
+      <li>回来点「启动」，再点「登录页」扫码登录 QQ。</li>
+    </ol>
+  </div>
+
   <div class="card">
     <h2>进程</h2>
     <div class="rowline">
@@ -653,9 +664,19 @@ async function refreshStatus() {
   try {
     const s = await api('status');
     const gw = s.snowluma || {};
-    led('led-gw', gw.onebotWs ? 'ok' : gw.webui ? 'warn' : '');
-    $('meta-gw').textContent = gw.onebotWs ? 'QQ 已在线' : gw.webui ? '在跑，QQ 未登录' : '未运行';
-    $('btn-gw-start').disabled = !!gw.running;
+    const gwMissing = gw.installed === false && !gw.running;
+    if ($('gw-missing')) $('gw-missing').hidden = !gwMissing;
+    led('led-gw', gwMissing ? 'warn' : gw.onebotWs ? 'ok' : gw.webui ? 'warn' : '');
+    $('meta-gw').textContent = gwMissing
+      ? '未安装（按上面的四步装一下）'
+      : gw.onebotWs
+        ? 'QQ 已在线'
+        : gw.webui
+          ? '在跑，QQ 未登录'
+          : '未运行';
+    $('btn-gw-start').disabled = !!gw.running || gwMissing;
+    const gwLogin = $('btn-gw-login');
+    if (gwLogin) gwLogin.disabled = gwMissing;
 
     const bot = s.bot || {};
     botRunning = !!bot.running;

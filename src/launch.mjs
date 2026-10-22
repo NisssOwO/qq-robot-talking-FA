@@ -155,7 +155,10 @@ async function ensureSnowLuma() {
   }
 
   if (!fs.existsSync(path.join(SNOWLUMA_DIR, 'index.mjs'))) {
-    console.log('[launch] 这个目录里没有随包的 snowluma\\，跳过自启；请自行启动 SnowLuma。');
+    console.log('[launch] 这个目录里没有 snowluma\\，跳过自启。');
+    console.log('[launch] 需要先装 QQ 网关：从 https://github.com/SnowLuma/SnowLuma 的 Releases');
+    console.log('[launch] 下载 Windows 版，解压后把文件夹改名为 snowluma，放到本目录（和 node.exe 同级）。');
+    console.log('[launch] 或者你自己用别的方式启动 SnowLuma，只要 38001 端口能连上就行。');
     return false;
   }
 

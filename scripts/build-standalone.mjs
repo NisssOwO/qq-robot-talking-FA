@@ -73,9 +73,10 @@ step('app', () => copyDir(path.join(ROOT, 'app'), path.join(OUT, 'app')));
 // 2) 依赖（运行期只需要 dependencies；node_modules 里没有原生模块）
 step('node_modules', () => copyDir(path.join(ROOT, 'node_modules'), path.join(OUT, 'node_modules'), { skip: ['.bin', '.cache'] }));
 
-// 2b) SnowLuma（QQ 网关）：整包带上，启动器负责拉起它
+// 2b) SnowLuma（QQ 网关）：默认整包带上，启动器负责拉起它。
+//     --no-gateway 时不带：SnowLuma 有自己的非商业许可，公开分发时把网关留给使用者自己装更稳。
+const withGateway = !argv.includes('--no-gateway');
 const SNOWLUMA_OUT = path.join(OUT, 'snowluma');
-step('snowluma', () => copyDir(path.join(ROOT, 'SnowLuma-v2.0.3-win-x64'), SNOWLUMA_OUT, { skip: ['logs'] }));
 // 账号隐私不外带：删掉已登录账号的配置与会话数据，使用者首次运行时扫码登录。
 function pruneSnowLumaAccount() {
   let removed = 0;
@@ -99,8 +100,13 @@ function pruneSnowLumaAccount() {
   fs.mkdirSync(dataDir, { recursive: true });
   return removed;
 }
-if (fs.existsSync(SNOWLUMA_OUT)) {
-  report.push(`snowluma: 已清理账号数据 ${pruneSnowLumaAccount()} 项（首次运行需扫码登录）`);
+if (withGateway) {
+  step('snowluma', () => copyDir(path.join(ROOT, 'SnowLuma-v2.0.3-win-x64'), SNOWLUMA_OUT, { skip: ['logs'] }));
+  if (fs.existsSync(SNOWLUMA_OUT)) {
+    report.push(`snowluma: 已清理账号数据 ${pruneSnowLumaAccount()} 项（首次运行需扫码登录）`);
+  }
+} else {
+  report.push('snowluma: 跳过（--no-gateway），使用者需按 README 自行下载网关');
 }
 
 // 3) 资源：角色卡 / 世界观 / 提示词 / 静态资源 / 音频
@@ -201,13 +207,26 @@ if (csc && fs.existsSync(launcherSrc)) {
 
 // 8) README
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+const gatewayBlock = withGateway ? [] : [
+  '【先装网关（本包不含）】',
+  '本包为了遵守 SnowLuma 的许可，没有把 QQ 网关打进来。它免费，两分钟就能装好：',
+  '1. 打开 https://github.com/SnowLuma/SnowLuma ，进 Releases 下载 Windows x64 压缩包。',
+  '2. 解压，把解出来的文件夹改名为 snowluma。',
+  '3. 放到本目录，和 QQ聊天机器人.exe、node.exe 同一层。',
+  '4. 再继续下面的「第一次使用」。',
+  ''
+];
 fs.writeFileSync(path.join(OUT, 'README.txt'), [
   'QQ 聊天机器人 · 独立版',
   '================================',
   '',
   `版本：${pkg.version ?? 'unknown'}`,
-  '不用装 Node、不用装 DSH、不用 npm install。双击「QQ聊天机器人.exe」就能用。QQ 网关（SnowLuma）已经在本目录里。',
+  '不用装 Node、不用装 DSH、不用 npm install。双击「QQ聊天机器人.exe」就能用。',
+  withGateway
+    ? 'QQ 网关（SnowLuma）已经在本目录的 snowluma\\ 里。'
+    : '注意：本包不含 QQ 网关，先按下面【先装网关】做一遍。',
   '',
+  ...gatewayBlock,
   '【第一次使用】',
   '1. 双击「QQ聊天机器人.exe」，等几秒，会弹出「QQ 聊天机器人控制台」窗口（Edge 应用模式，没有地址栏）。',
   '2. 左边选「模型与密钥」，填这几样，点「保存配置」：',

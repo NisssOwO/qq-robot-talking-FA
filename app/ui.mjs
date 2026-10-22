@@ -114,7 +114,15 @@ async function status() {
   const cfg = readConfig();
   const botAlive = children.bot && !children.bot.killed ? true : await probePort(Number(cfg?.consolePort ?? 3100), 500);
   return {
-    snowluma: { running: onebotWs || webui, webui, onebotHttp, onebotWs },
+    snowluma: {
+      running: onebotWs || webui,
+      webui,
+      onebotHttp,
+      onebotWs,
+      // 没装网关（发布包按许可要求不带它）时界面要给出下载指引，而不是只说"启动失败"。
+      installed: fs.existsSync(path.join(SNOWLUMA_DIR, 'index.mjs')),
+      dir: SNOWLUMA_DIR
+    },
     bot: { running: !!botAlive },
     config: cfg
       ? {
@@ -194,7 +202,14 @@ async function startSnowLuma() {
   if (children.snowluma) return { ok: true, already: true };
   if (await probePort(ONEBOT_WS_PORT, 600)) return { ok: true, already: true, external: true };
   const entry = path.join(SNOWLUMA_DIR, 'index.mjs');
-  if (!fs.existsSync(entry)) return { ok: false, error: `找不到 ${entry}` };
+  if (!fs.existsSync(entry)) {
+    return {
+      ok: false,
+      code: 'gateway-missing',
+      error: '没有找到 QQ 网关：snowluma\\index.mjs',
+      hint: '从 SnowLuma 的 GitHub 仓库 Releases 下载 Windows 版，解压后把文件夹改名为 snowluma，放到本程序目录下（与 node.exe 同一层）。'
+    };
+  }
   fs.mkdirSync(STATE_DIR, { recursive: true });
   const child = spawn(snowlumaNode(), ['index.mjs'], {
     cwd: SNOWLUMA_DIR,
