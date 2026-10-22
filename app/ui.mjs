@@ -60,6 +60,8 @@ const DEFAULTS = {
   tts: { enabled: true, baseUrl: 'https://api.fish.audio', apiKey: '', model: 's2.1-pro-free' },
   webSearch: { apiKey: '', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: '' },
   allow: { groups: [], private: [] },
+  // QQ 本体：网关要注入到一个正在运行的 QQ 上，所以这里记住它装在哪、要不要顺手拉起来。
+  qq: { path: '', autoLaunch: true },
   backend: 'standalone',
   consolePort: 3100
 };
@@ -114,6 +116,106 @@ function probePort(port, timeoutMs = 700) {
   });
 }
 
+// ── QQ 本体 ─────────────────────────────────────────────
+// 网关的做法是 hook 注入到正在运行的 QQ 进程里，所以 QQ 得先开着（否则注入器只能干等）。
+// QQ 自己是多进程的，一台机器上出现好几个 QQ.exe 属正常，所以只看「有没有」，不看数量。
+let qqCache = { at: 0, list: [] };
+
+function listQQProcessesFresh() {
+  return new Promise((resolve) => {
+    const script = `Get-CimInstance Win32_Process -Filter "Name='QQ.exe'" | ForEach-Object { $_.ProcessId.ToString() + '|' + $_.ExecutablePath }`;
+    execFile('powershell', ['-NoProfile', '-Command', script], { windowsHide: true }, (error, stdout) => {
+      if (error) return resolve([]);
+      resolve(String(stdout ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((line) => {
+        const [pid, exe] = line.split('|');
+        return { pid: Number(pid) || 0, path: String(exe ?? '').trim() };
+      }));
+    });
+  });
+}
+
+// 面板状态每 5 秒刷一次，每次都起一个 powershell 太浪费；2 秒内的结果直接复用。
+async function listQQProcesses() {
+  if (Date.now() - qqCache.at < 2000) return qqCache.list;
+  const list = await listQQProcessesFresh();
+  qqCache = { at: Date.now(), list };
+  return list;
+}
+
+// 注册表里 QQ 的 DisplayIcon 形如 `F:\QQNT\QQ.exe,0`，去掉末尾的图标序号才是路径。
+function cleanDisplayIcon(raw) {
+  return String(raw ?? '').trim().replace(/^"|"$/g, '').replace(/,\s*-?\d+$/, '').trim();
+}
+
+function readQQFromRegistry() {
+  return new Promise((resolve) => {
+    const script = `foreach ($k in @('HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QQ','HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QQ','HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QQ')) { if (Test-Path $k) { $v = (Get-ItemProperty $k -ErrorAction SilentlyContinue).DisplayIcon; if ($v) { $v; break } } }`;
+    execFile('powershell', ['-NoProfile', '-Command', script], { windowsHide: true }, (error, stdout) => {
+      if (error) return resolve('');
+      resolve(cleanDisplayIcon(String(stdout ?? '').split(/\r?\n/)[0]));
+    });
+  });
+}
+
+// 探测顺序：正在跑的 QQ → 配置里存的 → 注册表。用户自定义安装（比如 F:\QQNT）只能靠前两者。
+async function detectQQPath(cfg, procs) {
+  const list = procs ?? (await listQQProcesses());
+  const running = list.find((p) => p.path && fs.existsSync(p.path));
+  if (running) return running.path;
+  const configured = String(cfg?.qq?.path ?? '').trim();
+  if (configured && fs.existsSync(configured)) return configured;
+  const fromReg = await readQQFromRegistry();
+  if (fromReg && fs.existsSync(fromReg)) return fromReg;
+  return '';
+}
+
+async function startQQ() {
+  const cfg = readConfig();
+  const before = await listQQProcesses();
+  if (before.length) return { ok: true, already: true, count: before.length };
+  const exe = await detectQQPath(cfg, before);
+  if (!exe) {
+    return {
+      ok: false,
+      code: 'qq-missing',
+      error: '没有找到 QQ.exe：请在「QQ 启动」里填好 QQ 的路径'
+    };
+  }
+  if (!fs.existsSync(exe)) {
+    return { ok: false, code: 'qq-path-invalid', error: `找不到 QQ.exe：${exe}` };
+  }
+  try {
+    const child = spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: false });
+    child.unref();
+  } catch (error) {
+    return { ok: false, code: 'qq-spawn-failed', error: `启动 QQ 失败：${error?.message ?? error}` };
+  }
+  log(`QQ 已拉起：${exe}`);
+  // 等进程真正出现再往下走：网关要先看到 QQ 才能注入，抢跑只会白等。
+  for (let i = 0; i < 30; i += 1) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const now = await listQQProcessesFresh();
+    if (now.length) {
+      qqCache = { at: Date.now(), list: now };
+      return { ok: true, started: true, path: exe, count: now.length };
+    }
+  }
+  return { ok: false, code: 'qq-timeout', error: 'QQ 启动了，但 30 秒内没等到进程' };
+}
+
+// 让用户直接挑文件，省得手打 F:\QQNT\QQ.exe 这种路径。
+// WinForms 的对话框必须在 STA 线程里开，所以带 -STA。
+function pickQQPath() {
+  return new Promise((resolve) => {
+    const script = `Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Title = '选择 QQ.exe'; $d.Filter = 'QQ.exe|QQ.exe|可执行文件 (*.exe)|*.exe'; if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $d.FileName }`;
+    execFile('powershell', ['-NoProfile', '-STA', '-Command', script], { windowsHide: true }, (error, stdout) => {
+      if (error) return resolve({ ok: false, error: `打开文件选择框失败：${error.message}` });
+      const picked = String(stdout ?? '').trim();
+      resolve(picked ? { ok: true, path: picked } : { ok: true, canceled: true });
+    });
+  });
+}
+
 async function status() {
   const [webui, onebotHttp, onebotWs] = await Promise.all([
     probePort(WEBUI_PORT),
@@ -122,6 +224,8 @@ async function status() {
   ]);
   const cfg = readConfig();
   const botAlive = children.bot && !children.bot.killed ? true : await probePort(Number(cfg?.consolePort ?? 3100), 500);
+  const qqProcs = await listQQProcesses();
+  const qqConfigured = String(cfg?.qq?.path ?? '').trim();
   return {
     snowluma: {
       running: onebotWs || webui,
@@ -133,6 +237,16 @@ async function status() {
       dir: SNOWLUMA_DIR
     },
     bot: { running: !!botAlive },
+    // QQ 本体：网关靠注入它工作，所以面板要能把「装在哪、开没开」摆出来。
+    qq: {
+      running: qqProcs.length > 0,
+      count: qqProcs.length,
+      path: qqConfigured,
+      configured: !!qqConfigured,
+      autoLaunch: cfg?.qq?.autoLaunch !== false,
+      // 正在跑的那个 QQ 的路径，比配置里存的更可信（用户可能重装到别处）
+      runningPath: qqProcs.find((p) => p.path)?.path ?? ''
+    },
     config: cfg
       ? {
           hasKey: !!String(cfg.llm?.apiKey ?? '').trim(),
@@ -450,6 +564,16 @@ function mergeConfig(base, input) {
     private: input.private === undefined ? (prevAllow.private ?? []) : parseList(input.private)
   };
   if (String(input.ownerQQ ?? '').trim()) next.ownerQQ = Number(String(input.ownerQQ).trim()) || 0;
+  // QQ 本体：路径留空表示没配（首次启动会去探测），autoLaunch 缺省开。
+  const prevQQ = next.qq ?? {};
+  next.qq = {
+    ...DEFAULTS.qq,
+    ...prevQQ,
+    path: input.qqPath === undefined ? (prevQQ.path ?? '') : String(input.qqPath).trim(),
+    autoLaunch: input.qqAutoLaunch === undefined
+      ? (prevQQ.autoLaunch ?? DEFAULTS.qq.autoLaunch)
+      : !!input.qqAutoLaunch
+  };
   next.consolePort = Number(input.consolePort) || next.consolePort || DEFAULTS.consolePort;
   const consoleToken = String(input.consoleToken ?? '').trim();
   if (consoleToken) next.consoleToken = consoleToken;
@@ -695,6 +819,12 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'POST' && sub === 'snowluma/stop') return json(res, 200, await stopSnowLuma());
       if (req.method === 'POST' && sub === 'bot/start') return json(res, 200, await startBot());
       if (req.method === 'POST' && sub === 'bot/stop') return json(res, 200, await stopBot());
+      if (req.method === 'POST' && sub === 'qq/start') return json(res, 200, await startQQ());
+      if (req.method === 'POST' && sub === 'qq/pick') return json(res, 200, await pickQQPath());
+      if (req.method === 'POST' && sub === 'qq/detect') {
+        const p = await detectQQPath(readConfig());
+        return json(res, 200, p ? { ok: true, path: p } : { ok: false, error: '没探测到 QQ.exe，请点「浏览…」手动选' });
+      }
       if (req.method === 'POST' && sub === 'open-webui') {
         const opened = openAppWindow(`http://127.0.0.1:${WEBUI_PORT}/`, '点了「登录页」（网关 WebUI）');
         return json(res, 200, { ok: opened, url: `http://127.0.0.1:${WEBUI_PORT}/` });
@@ -858,6 +988,15 @@ async function autostart() {
     return;
   }
   log('配置完整，自动启动…');
+  // QQ 先起来：网关是往 QQ 进程里注入 hook 的，QQ 没开它只能干等。
+  if (cfg?.qq?.autoLaunch !== false) {
+    const qq = await startQQ();
+    if (qq.already) log(`QQ 已在运行（${qq.count} 个进程），跳过。`);
+    else if (qq.ok) log(`QQ 已拉起（${qq.path}），等它连上后网关会自动注入。`);
+    else log(`QQ 没起来：${qq.error}`);
+  } else {
+    log('已关闭「启动时自动打开 QQ」，跳过检测。');
+  }
   const gw = await startSnowLuma();
   if (gw.external) log('网关已经在跑，复用。');
   else if (gw.ok) log('网关启动中，等 QQ 上线…');

@@ -235,6 +235,7 @@ const NAV = [
   { group: '管理', items: [
     { id: 'model',    label: '模型与密钥', ico: '⚙', self: true },
     { id: 'allow',    label: '对话范围', ico: '👥', self: true },
+    { id: 'qq',       label: 'QQ 启动', ico: '▶', self: true },
     { id: 'close',    label: '关窗行为', ico: '⏻', self: true },
     { id: 'usage',    label: '令牌与花费', ico: '◧' },
     { id: 'access',   label: '访问与安全', ico: '⊙' },
@@ -471,6 +472,54 @@ closeView.innerHTML = head('ON CLOSE', '关窗行为', '右上角把控制面板
 </div>`;
 $('main').appendChild(closeView);
 
+// ── 自建页：QQ 启动 ────────────────────────────────────
+const qqView = document.createElement('section');
+qqView.className = 'view pad';
+qqView.dataset.view = 'qq';
+qqView.innerHTML = head('QQ LAUNCH', 'QQ 启动', '网关是往正在运行的 QQ 里注入的，所以 QQ 得先开着。这里记下 QQ 装在哪，以及启动面板时要不要顺手把它拉起来。') + `
+<div class="grid">
+  <div class="card span2" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <i class="led" id="qq-led" style="width:12px;height:12px;flex:0 0 12px"></i>
+    <div style="min-width:220px">
+      <div id="qq-now" style="font-size:17px;font-weight:600">读取中…</div>
+      <div class="hint" id="qq-now-sub" style="margin-top:3px"></div>
+    </div>
+    <div id="qq-now-facts" style="margin-left:auto;display:flex;gap:26px;text-align:right;flex-wrap:wrap"></div>
+    <button id="qq-start" style="margin-left:8px">现在启动 QQ</button>
+  </div>
+
+  <div class="card span2">
+    <h2>QQ 装在哪</h2>
+    <div class="hint">填 <code>QQ.exe</code> 的完整路径。不知道就点「自动探测」，它会先看正在运行的 QQ、再查注册表。</div>
+    <div class="two" style="margin-top:12px">
+      <div>
+        <label>QQ.exe 路径</label>
+        <input id="qq-path" placeholder="例如 F:\\QQNT\\QQ.exe">
+      </div>
+      <div style="display:flex;align-items:flex-end;gap:10px;padding-bottom:1px">
+        <button id="qq-detect">自动探测</button>
+        <button id="qq-pick">浏览…</button>
+      </div>
+    </div>
+    <div class="hint" id="qq-path-hint" style="margin-top:10px"></div>
+  </div>
+
+  <div class="card span2">
+    <h2>启动时自动打开 QQ</h2>
+    <label style="display:flex;align-items:center;gap:8px;font-weight:500">
+      <input type="checkbox" id="qq-auto" style="width:auto" checked> 面板启动时，如果 QQ 没开就先把它启动起来
+    </label>
+    <div class="hint" style="margin-top:10px">打开这个开关后，双击启动面板会先检查 QQ：没在跑就把 QQ 拉起来，然后再启动网关和机器人。</div>
+    <div class="hint" style="margin-top:4px">程序只能把窗口叫起来，不能替你登录。</div>
+    <div style="margin-top:16px;display:flex;align-items:center;gap:12px">
+      <button class="primary" id="qq-save">保存配置</button>
+      <span class="hint">保存后下次启动生效，不用重启网关。</span>
+    </div>
+    <div class="toast" id="qq-toast"></div>
+  </div>
+</div>`;
+$('main').appendChild(qqView);
+
 // ── 自建页：静默时间 ────────────────────────────────────
 const quietView = document.createElement('section');
 quietView.className = 'view pad';
@@ -568,6 +617,7 @@ function go(id) {
     if (id === 'rolepack') void loadRolePacks();
     if (id === 'quiet') void loadQuiet();
     if (id === 'close') void loadCloseSetting();
+    if (id === 'qq') void loadQQ();
     return;
   }
   showConsolePage(id);
@@ -1197,6 +1247,106 @@ document.querySelectorAll('input[name="closeAction"]').forEach(function (el) {
     }
   };
 });
+
+// ── QQ 启动 ─────────────────────────────────────────────
+// 网关是往 QQ 进程里注入 hook 的，所以这里只做两件事：记住 QQ 装在哪、需要时把它拉起来。
+function applyQQ(q) {
+  q = q || {};
+  const running = !!q.running;
+  const led = $('qq-led');
+  if (led) {
+    led.style.background = running ? 'var(--ok,#22c55e)' : 'var(--muted,#c9ced9)';
+    led.style.boxShadow = running ? '0 0 0 3px rgba(34,197,94,.16)' : 'none';
+  }
+  if ($('qq-now')) $('qq-now').textContent = running ? 'QQ 运行中' : 'QQ 没在跑';
+  if ($('qq-now-sub')) {
+    $('qq-now-sub').textContent = running
+      ? '网关会自动注入它；如果还没上线，等一会儿或看网关日志。'
+      : (q.configured ? '启动面板时会自动拉起；也可以点右边按钮现在启动。' : '先填下面的路径，或点「自动探测」。');
+  }
+  const facts = $('qq-now-facts');
+  if (facts) {
+    const rows = [
+      ['进程数', running ? String(q.count) : '0'],
+      ['自动启动', q.autoLaunch === false ? '已关' : '已开'],
+      ['路径', q.runningPath || q.path || '未配置']
+    ];
+    facts.innerHTML = rows.map(function (r) {
+      const val = String(r[1]).replace(/</g, '&lt;');
+      return '<div><div class="hint" style="margin:0">' + r[0] + '</div>'
+        + '<div style="font-weight:600;font-size:13.5px;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + val + '">' + val + '</div></div>';
+    }).join('');
+  }
+  if (q.path && !$('qq-path').value) $('qq-path').value = q.path;
+  if ($('qq-auto')) $('qq-auto').checked = q.autoLaunch !== false;
+}
+async function loadQQ() {
+  try {
+    const s = await api('status');
+    applyQQ(s.qq);
+    const hint = $('qq-path-hint');
+    if (!hint) return;
+    if (s.qq && s.qq.configured) hint.textContent = '已保存：' + s.qq.path;
+    else if (s.qq && s.qq.runningPath) hint.textContent = '检测到正在运行的 QQ：' + s.qq.runningPath + '（点「自动探测」填进去再保存）';
+    else hint.textContent = '还没保存路径；自动探测会先看正在跑的 QQ，再查注册表。';
+  } catch (e) { /* 忽略 */ }
+}
+if ($('qq-start')) {
+  $('qq-start').onclick = async function () {
+    const btn = $('qq-start');
+    btn.disabled = true;
+    btn.textContent = '启动中…';
+    try {
+      const r = await api('qq/start', { method: 'POST' });
+      if (r.already) toast('qq-toast', 'QQ 已经在运行了（' + r.count + ' 个进程）');
+      else if (r.ok) toast('qq-toast', 'QQ 已启动：' + r.path);
+      else toast('qq-toast', r.error || '启动失败', true);
+      await loadQQ();
+    } catch (e) {
+      toast('qq-toast', '启动失败：' + e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '现在启动 QQ';
+    }
+  };
+}
+if ($('qq-detect')) {
+  $('qq-detect').onclick = async function () {
+    try {
+      const r = await api('qq/detect', { method: 'POST' });
+      if (r.ok && r.path) { $('qq-path').value = r.path; toast('qq-toast', '探测到：' + r.path); }
+      else toast('qq-toast', r.error || '没探测到', true);
+    } catch (e) {
+      toast('qq-toast', '探测失败：' + e.message, true);
+    }
+  };
+}
+if ($('qq-pick')) {
+  $('qq-pick').onclick = async function () {
+    try {
+      const r = await api('qq/pick', { method: 'POST' });
+      if (r.path) { $('qq-path').value = r.path; toast('qq-toast', '已选择：' + r.path); }
+      else if (!r.canceled) toast('qq-toast', r.error || '没选到文件', true);
+    } catch (e) {
+      toast('qq-toast', '打开选择框失败：' + e.message, true);
+    }
+  };
+}
+if ($('qq-save')) {
+  $('qq-save').onclick = async function () {
+    try {
+      await api('config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ qqPath: $('qq-path').value, qqAutoLaunch: $('qq-auto').checked })
+      });
+      toast('qq-toast', '已保存');
+      await loadQQ();
+    } catch (e) {
+      toast('qq-toast', '保存失败：' + e.message, true);
+    }
+  };
+}
 
 // 关窗时用 beacon 通知服务端；服务端挂 3 秒，期间有新页面加载（下面的 ping）就取消，
 // 所以刷新不会误停。点右上角 × 才是真关闭。
