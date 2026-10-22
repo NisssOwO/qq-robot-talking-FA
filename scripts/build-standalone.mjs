@@ -71,6 +71,15 @@ step('src', () => copyDir(path.join(ROOT, 'src'), path.join(OUT, 'src'), { filte
 // 1b) 配置向导（app/setup.mjs，start.bat 起不来时先开它）
 step('app', () => copyDir(path.join(ROOT, 'app'), path.join(OUT, 'app'), { filter: (name) => !/[.]bak-|[.]orig$|^[.]DS_Store$/.test(name) }));
 
+// 1b) WebView2 的三个原生 dll 必须和 exe 同一层，否则双击 exe 起不来。
+step('app/lib → 根目录', () => {
+  const libDir = path.join(ROOT, 'app', 'lib');
+  const names = fs.existsSync(libDir) ? fs.readdirSync(libDir).filter((n) => n.toLowerCase().endsWith('.dll')) : [];
+  if (!names.length) return report.push('WebView2 dll: 跳过（app/lib 里没有 dll）');
+  for (const name of names) fs.copyFileSync(path.join(libDir, name), path.join(OUT, name));
+  report.push(`WebView2 dll: ${names.length} 个已放到根目录`);
+});
+
 // 1c) 面板会调用的运维脚本：DSH 端口检测（只有把 backend 切成 dsh 时才用得上）
 step('scripts', () => {
   const from = path.join(ROOT, 'scripts', 'dsh-endpoint.mjs');
@@ -207,9 +216,14 @@ const launcherExe = path.join(OUT, 'QQ聊天机器人.exe');
 if (csc && fs.existsSync(launcherSrc)) {
   try {
     execFileSync(csc, [
-      '-nologo', '-target:winexe', '-codepage:65001',
+      '-nologo', '-target:winexe', '-platform:x64', '-codepage:65001',
       `-out:${launcherExe}`,
+      `-win32manifest:${path.join(ROOT, 'app', 'app.manifest')}`,
       '-reference:System.Windows.Forms.dll',
+      '-reference:System.Drawing.dll',
+      '-reference:System.Web.Extensions.dll',
+      `-reference:${path.join(ROOT, 'app', 'lib', 'Microsoft.Web.WebView2.Core.dll')}`,
+      `-reference:${path.join(ROOT, 'app', 'lib', 'Microsoft.Web.WebView2.WinForms.dll')}`,
       launcherSrc
     ], { stdio: 'pipe' });
     report.push(`QQ聊天机器人.exe: 已生成（${(fs.statSync(launcherExe).size / 1024).toFixed(0)} KB，双击即用）`);

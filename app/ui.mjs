@@ -736,17 +736,33 @@ const port = Number(process.env.QQ_BOT_UI_PORT) || Number(process.env.QQ_BOT_SET
 const UI_SETTINGS_PATH = path.join(STATE_DIR, 'ui.json');
 
 function readUiSettings() {
+  let raw = {};
   try {
-    const raw = JSON.parse(fs.readFileSync(UI_SETTINGS_PATH, 'utf8'));
-    return { closeAction: raw.closeAction === 'stop' ? 'stop' : 'keep' };
+    raw = JSON.parse(fs.readFileSync(UI_SETTINGS_PATH, 'utf8')) || {};
   } catch {
-    return { closeAction: 'keep' };
+    raw = {};
   }
+  // 旧的 keep/stop 迁移到新的 tray/exit
+  const closeAction = raw.closeAction === 'exit' || raw.closeAction === 'stop'
+    ? 'exit'
+    : 'tray';
+  const theme = raw.theme === 'dark' || raw.theme === 'light' ? raw.theme : 'auto';
+  return {
+    closeAction,
+    theme,
+    rememberClose: raw.rememberClose === true,
+    exitStopsServices: raw.exitStopsServices !== false
+  };
 }
 
 function writeUiSettings(patch) {
-  const next = { ...readUiSettings(), ...patch };
-  next.closeAction = next.closeAction === 'stop' ? 'stop' : 'keep';
+  let prev = {};
+  try { prev = JSON.parse(fs.readFileSync(UI_SETTINGS_PATH, 'utf8')) || {}; } catch { prev = {}; }
+  const next = { ...readUiSettings(), ...prev, ...patch };
+  next.closeAction = next.closeAction === 'exit' || next.closeAction === 'stop' ? 'exit' : 'tray';
+  next.theme = next.theme === 'dark' || next.theme === 'light' ? next.theme : 'auto';
+  next.rememberClose = next.rememberClose === true;
+  next.exitStopsServices = next.exitStopsServices !== false;
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.writeFileSync(UI_SETTINGS_PATH, JSON.stringify(next, null, 2), 'utf8');
   return next;
