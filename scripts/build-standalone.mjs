@@ -66,10 +66,10 @@ function step(label, fn) {
 }
 
 // 1) 源码
-step('src', () => copyDir(path.join(ROOT, 'src'), path.join(OUT, 'src')));
+step('src', () => copyDir(path.join(ROOT, 'src'), path.join(OUT, 'src'), { filter: (name) => !/[.]bak-|[.]orig$|^[.]DS_Store$/.test(name) }));
 
 // 1b) 配置向导（app/setup.mjs，start.bat 起不来时先开它）
-step('app', () => copyDir(path.join(ROOT, 'app'), path.join(OUT, 'app')));
+step('app', () => copyDir(path.join(ROOT, 'app'), path.join(OUT, 'app'), { filter: (name) => !/[.]bak-|[.]orig$|^[.]DS_Store$/.test(name) }));
 
 // 2) 依赖（运行期只需要 dependencies；node_modules 里没有原生模块）
 step('node_modules', () => copyDir(path.join(ROOT, 'node_modules'), path.join(OUT, 'node_modules'), { skip: ['.bin', '.cache'] }));
@@ -116,7 +116,7 @@ step('roles', () => copyDir(path.join(ROOT, 'roles'), path.join(OUT, 'roles'), {
   filter: (name) => !/\.bak-|\.orig$|^\.DS_Store$/.test(name),
 }));
 step('resources', () => copyDir(path.join(ROOT, 'resources'), path.join(OUT, 'resources')));
-step('dsh/agent-presets', () => copyDir(path.join(ROOT, 'dsh', 'agent-presets'), path.join(OUT, 'dsh', 'agent-presets')));
+step('dsh/agent-presets', () => copyDir(path.join(ROOT, 'dsh', 'agent-presets'), path.join(OUT, 'dsh', 'agent-presets'), { filter: (name) => !/[.]bak-|[.]orig$|^[.]DS_Store$/.test(name) }));
 for (const name of ['world.json', 'assets', 'audio', 'public']) {
   const from = path.join(ROOT, name);
   if (!fs.existsSync(from)) continue;
