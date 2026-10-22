@@ -319,7 +319,7 @@ QQ 风控。换小号、降低发言频率、关掉「主动搭话」，第二�
 ## 致谢
 
 - [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge)：本项目代码的上游。
-- SnowLuma：QQ 网关。
+- [SnowLuma](https://github.com/SnowLuma/SnowLuma)：QQ 网关。
 - [eidolon-sc](https://github.com/eidolon-sc)：串流语音与世界观注入的思路参考。
 - Fish Audio：语音合成。
 - 所有写角色卡、整理设定、试玩反馈的人。
