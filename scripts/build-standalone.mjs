@@ -34,17 +34,18 @@ if (fs.existsSync(OUT)) {
 }
 fs.mkdirSync(OUT, { recursive: true });
 
-function copyDir(from, to, { skip = [] } = {}) {
+function copyDir(from, to, { skip = [], filter = null } = {}) {
   if (!fs.existsSync(from)) return 0;
   fs.mkdirSync(to, { recursive: true });
   let n = 0;
   for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
     if (skip.includes(entry.name)) continue;
+    if (filter && !filter(entry.name)) continue;
     const src = path.join(from, entry.name);
     const dst = path.join(to, entry.name);
     if (entry.isDirectory()) {
       fs.mkdirSync(dst, { recursive: true });
-      n += copyDir(src, dst, { skip });
+      n += copyDir(src, dst, { skip, filter });
     } else if (entry.isFile() || entry.isSymbolicLink()) {
       try {
         fs.copyFileSync(src, dst);
@@ -110,7 +111,10 @@ if (withGateway) {
 }
 
 // 3) 资源：角色卡 / 世界观 / 提示词 / 静态资源 / 音频
-step('roles', () => copyDir(path.join(ROOT, 'roles'), path.join(OUT, 'roles')));
+step('roles', () => copyDir(path.join(ROOT, 'roles'), path.join(OUT, 'roles'), {
+  skip: ['.backup', '.refs', '.git'],
+  filter: (name) => !/\.bak-|\.orig$|^\.DS_Store$/.test(name),
+}));
 step('resources', () => copyDir(path.join(ROOT, 'resources'), path.join(OUT, 'resources')));
 step('dsh/agent-presets', () => copyDir(path.join(ROOT, 'dsh', 'agent-presets'), path.join(OUT, 'dsh', 'agent-presets')));
 for (const name of ['world.json', 'assets', 'audio', 'public']) {
@@ -119,7 +123,7 @@ for (const name of ['world.json', 'assets', 'audio', 'public']) {
   const dst = path.join(OUT, name);
   if (fs.statSync(from).isDirectory()) {
     fs.mkdirSync(dst, { recursive: true });
-    step(name, () => copyDir(from, dst));
+    step(name, () => copyDir(from, dst, { skip: ["logs"], filter: name === "audio" ? () => false : name === "public" ? (n) => !/\.bak-/.test(n) : undefined }));
   } else {
     fs.copyFileSync(from, dst);
     report.push(`${name}: 1`);
