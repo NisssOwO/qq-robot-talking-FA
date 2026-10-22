@@ -102,7 +102,7 @@ qq-bot\
 所以这一步要你自己下，下完放到程序目录里就行。
 
 1. 打开 <https://github.com/SnowLuma/SnowLuma>，进右侧 **Releases**，下载最新的 **Windows x64** 压缩包
-   （名字类似 `SnowLuma-vX.Y.Z-win-x64.zip`）。
+   （选名字里**不带 `lite`** 的那个完整包，自带运行环境；带 `lite` 的需要你本机已装 Node 22.13+）。
 2. 解压，得到一个文件夹（里面能看到 `node.exe`、`index.mjs`）。
 3. **把这个文件夹改名为 `snowluma`**（名字必须是这个）。
 4. 放到程序目录下，和 `QQ聊天机器人.exe`、`node.exe` **同一层**：
