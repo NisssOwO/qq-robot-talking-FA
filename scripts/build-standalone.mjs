@@ -225,10 +225,13 @@ const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
 const gatewayBlock = withGateway ? [] : [
   '【先装网关（本包不含）】',
   '本包为了遵守 SnowLuma 的许可，没有把 QQ 网关打进来。它免费，两分钟就能装好：',
-  '1. 打开 https://github.com/SnowLuma/SnowLuma ，进 Releases 下载 Windows x64 压缩包。',
-  '2. 解压，把解出来的文件夹改名为 snowluma。',
-  '3. 放到本目录，和 QQ聊天机器人.exe、node.exe 同一层。',
-  '4. 再继续下面的「第一次使用」。',
+  '1. 装好桌面版 QQ（NTQQ），能正常打开登录。',
+  '2. 打开 https://github.com/SnowLuma/SnowLuma ，进 Releases 下载 Windows x64 压缩包。',
+  '3. 解压，把解出来的文件夹改名为 snowluma。',
+  '4. 放到本目录，和 QQ聊天机器人.exe、node.exe 同一层。',
+  '5. 网关首次启动后，面板会把它自己的端口自动改成 38000/38001（默认 3000/3001 被 Windows 占了），',
+  '   不用你手动改；如果面板显示 38000/38001 不绿，重启一次网关即可。',
+  '6. 再继续下面的「第一次使用」。',
   ''
 ];
 fs.writeFileSync(path.join(OUT, 'README.txt'), [

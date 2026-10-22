@@ -27,6 +27,7 @@ const SNOWLUMA_DIR = path.join(ROOT, 'snowluma');
 const SNOWLUMA_PID = path.join(STATE_DIR, 'snowluma.pid');
 
 const ONEBOT_WS_PORT = 38001;
+const ONEBOT_HTTP_PORT = 38000;
 const WEBUI_PORT = 5099;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -148,11 +149,45 @@ function clearSnowLumaPid() {
   } catch {}
 }
 
+// 网关默认端口 3000/3001 被 Windows 保留段占了，启动前统一改成 38000/38001
+function normalizeGatewayPorts() {
+  const cfgDir = path.join(SNOWLUMA_DIR, 'config');
+  if (!fs.existsSync(cfgDir)) return;
+  let names = [];
+  try { names = fs.readdirSync(cfgDir).filter((n) => /^onebot_.*\.json$/i.test(n)); } catch { return; }
+  const changed = [];
+  for (const name of names) {
+    const file = path.join(cfgDir, name);
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+      let dirty = false;
+      for (const s of raw?.networks?.httpServers ?? []) {
+        if (Number(s.port) === 3000) { s.port = ONEBOT_HTTP_PORT; dirty = true; }
+      }
+      for (const s of raw?.networks?.wsServers ?? []) {
+        if (Number(s.port) === 3001) { s.port = ONEBOT_WS_PORT; dirty = true; }
+      }
+      if (dirty) {
+        const tmp = file + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify(raw, null, 2));
+        fs.renameSync(tmp, file);
+        changed.push(name);
+      }
+    } catch {
+      /* 单个文件坏掉不影响启动 */
+    }
+  }
+  if (changed.length) console.log(`[launch] 网关端口已统一到 ${ONEBOT_HTTP_PORT}/${ONEBOT_WS_PORT}：${changed.join(', ')}`);
+}
+
 async function ensureSnowLuma() {
   if (await probePort(ONEBOT_WS_PORT)) {
     console.log('[launch] SnowLuma 已在运行（38001 可连），直接复用。');
     return true;
   }
+
+  // 网关默认 3000/3001，被 Windows 保留段占了，统一改成 38000/38001
+  normalizeGatewayPorts();
 
   if (!fs.existsSync(path.join(SNOWLUMA_DIR, 'index.mjs'))) {
     console.log('[launch] 这个目录里没有 snowluma\\，跳过自启。');

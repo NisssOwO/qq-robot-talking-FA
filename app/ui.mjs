@@ -206,9 +206,46 @@ function snowlumaNode() {
   return fs.existsSync(bundled) ? bundled : process.execPath;
 }
 
+// 网关默认端口是 3000/3001，Windows 有一段保留端口把它占了，绑不上。
+// 本程序统一用 38000/38001，所以启动网关之前先把它自己的配置改过来。
+function normalizeGatewayPorts() {
+  const cfgDir = path.join(SNOWLUMA_DIR, 'config');
+  const result = { files: 0, changed: [] };
+  if (!fs.existsSync(cfgDir)) return result;
+  let names = [];
+  try { names = fs.readdirSync(cfgDir).filter((n) => /^onebot_.*\.json$/i.test(n)); } catch { return result; }
+  result.files = names.length;
+  for (const name of names) {
+    const file = path.join(cfgDir, name);
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+      let dirty = false;
+      for (const s of raw?.networks?.httpServers ?? []) {
+        if (Number(s.port) === 3000) { s.port = ONEBOT_HTTP_PORT; dirty = true; }
+      }
+      for (const s of raw?.networks?.wsServers ?? []) {
+        if (Number(s.port) === 3001) { s.port = ONEBOT_WS_PORT; dirty = true; }
+      }
+      // 面板要连 38000/38001，如果用户自己填过别的端口就别动
+      if (dirty) {
+        const tmp = file + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify(raw, null, 2));
+        fs.renameSync(tmp, file);
+        result.changed.push(name);
+      }
+    } catch (error) {
+      log(`网关配置读不出 ${name}：${error?.message ?? error}`);
+    }
+  }
+  if (result.changed.length) log(`网关端口已统一到 ${ONEBOT_HTTP_PORT}/${ONEBOT_WS_PORT}：${result.changed.join(', ')}`);
+  return result;
+}
+
 async function startSnowLuma() {
   if (children.snowluma) return { ok: true, already: true };
-  if (await probePort(ONEBOT_WS_PORT, 600)) return { ok: true, already: true, external: true };
+  // 先修配置再判断：外部已在跑的网关下次重启也能拿到正确端口
+  const ports = normalizeGatewayPorts();
+  if (await probePort(ONEBOT_WS_PORT, 600)) return { ok: true, already: true, external: true, ports };
   const entry = path.join(SNOWLUMA_DIR, 'index.mjs');
   if (!fs.existsSync(entry)) {
     return {
