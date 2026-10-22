@@ -324,6 +324,8 @@ partial class MainForm : Form
             psi.UseShellExecute = false;
             psi.CreateNoWindow = true;
             psi.WindowStyle = ProcessWindowStyle.Hidden;
+            // 告诉面板：窗口由我这个 exe 提供，别再自己开一个浏览器窗口。
+            psi.EnvironmentVariables["QQBOT_HOST"] = "webview";
             psi.RedirectStandardOutput = true;
             psi.RedirectStandardError = true;
             panel = Process.Start(psi);
@@ -331,7 +333,7 @@ partial class MainForm : Form
             panel.ErrorDataReceived += delegate { };
             panel.BeginOutputReadLine();
             panel.BeginErrorReadLine();
-            Program.Log("面板已启动（pid " + panel.Id + "）");
+            Program.Log("面板已启动（pid " + panel.Id + "，窗口由本程序提供）");
         }
         catch (Exception ex)
         {

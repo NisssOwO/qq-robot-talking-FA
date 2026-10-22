@@ -36,7 +36,15 @@ const CONSOLE_PATH = path.join(ROOT, 'public', 'console.html');
 const WEBUI_PORT = 5099;
 const ONEBOT_HTTP_PORT = 38000;
 const ONEBOT_WS_PORT = 38001;
-const OPEN_WINDOW = !process.argv.includes('--no-open');
+// 被 QQ聊天机器人.exe（WebView2 宿主）拉起来时，窗口由宿主自己提供，
+// 这里绝对不能再开一个 Edge --app 窗口，否则用户会看到两个长得一样的窗口。
+const HOSTED_BY_LAUNCHER = process.env.QQBOT_HOST === 'webview' || process.env.QQ_BOT_NO_BROWSER === '1';
+// 只有在明确要求时才用浏览器开窗：默认不开。
+// 原因：面板已经由 QQ聊天机器人.exe（WebView2）提供窗口；再让浏览器开一个
+// --app 窗口，用户就会看到两个一模一样的界面，而且 Edge 单实例会把 --app
+// 转交给已运行的浏览器主进程，关都关不干净（残留窗口会一直挂在屏幕上）。
+// 想用浏览器看：面板里点「在浏览器打开」，或手动 `node app\ui.mjs --open`。
+const OPEN_WINDOW = process.argv.includes('--open') && !HOSTED_BY_LAUNCHER;
 
 const DEFAULTS = {
   llm: {
@@ -361,7 +369,8 @@ async function stopBot() {
   return { ok: true, stopped };
 }
 
-function openAppWindow(url) {
+function openAppWindow(url, reason = '') {
+  log(`开窗请求：${reason || '未说明'} → ${url}（Windows 会另起一个浏览器窗口）`);
   const candidates = [
     path.join(process.env['ProgramFiles(x86)'] ?? '', 'Microsoft/Edge/Application/msedge.exe'),
     path.join(process.env.ProgramFiles ?? '', 'Microsoft/Edge/Application/msedge.exe'),
@@ -687,7 +696,7 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'POST' && sub === 'bot/start') return json(res, 200, await startBot());
       if (req.method === 'POST' && sub === 'bot/stop') return json(res, 200, await stopBot());
       if (req.method === 'POST' && sub === 'open-webui') {
-        const opened = openAppWindow(`http://127.0.0.1:${WEBUI_PORT}/`);
+        const opened = openAppWindow(`http://127.0.0.1:${WEBUI_PORT}/`, '点了「登录页」（网关 WebUI）');
         return json(res, 200, { ok: opened, url: `http://127.0.0.1:${WEBUI_PORT}/` });
       }
       if (req.method === 'POST' && sub === 'mask') {
@@ -806,7 +815,8 @@ server.on('error', async (error) => {
       const data = await res.json();
       if (data && data.ok) {
         console.log(`[ui] 面板已经在运行：${url}（复用，不再启动第二个）`);
-        if (OPEN_WINDOW) openAppWindow(url);
+        if (OPEN_WINDOW) openAppWindow(url, '已有面板在跑，把浏览器窗口指过去');
+        else console.log('[ui] 已有面板在跑；本进程不开浏览器窗口（要开请加 --open）');
         setTimeout(() => process.exit(0), 600);
         return;
       }
@@ -825,8 +835,12 @@ server.listen(port, '127.0.0.1', () => {
   console.log(`[ui] 控制面板：${url}`);
   console.log(`[ui] 配置：${CONFIG_PATH}`);
   if (OPEN_WINDOW) {
-    const ok = openAppWindow(url);
+    const ok = openAppWindow(url, '启动时加了 --open');
     if (!ok) console.log(`[ui] 没找到 Edge/Chrome，手动打开 ${url}`);
+  } else if (HOSTED_BY_LAUNCHER) {
+    console.log('[ui] 窗口由 QQ聊天机器人.exe 提供，不开浏览器窗口。');
+  } else {
+    console.log(`[ui] 不开浏览器窗口；要看面板请打开 ${url}，或加 --open 启动。`);
   }
   autostart().catch((error) => log(`自动启动出错：${error?.message ?? error}`));
 });
