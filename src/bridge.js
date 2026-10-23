@@ -3742,7 +3742,7 @@ async function main() {
         // 管理端专用 v2 接口：带 agent token 的请求一律拒绝，防止 MCP 工具越权访问控制台功能
         // /api/socialV2/initial-prompt 也在这里：它是操作者写给 AI 的"环境背景"，
         // 让 AI 自己读/改等于把控制台的管理输入（以及未来可能写入的其它群信息）交给会话主体。
-        const adminOnlyV2Paths = ['/api/socialV2/config', '/api/socialV2/activity', '/api/socialV2/reset', '/api/socialV2/states', '/api/socialV2/wake', '/api/socialV2/initial-prompt'];
+        const adminOnlyV2Paths = ['/api/socialV2/config', '/api/socialV2/activity', '/api/socialV2/reset', '/api/socialV2/states', '/api/socialV2/wake', '/api/socialV2/initial-prompt', '/api/socialV2/proactive-now'];
         if (req.headers['x-agent-token'] && (adminOnlyV2Paths.includes(url.pathname) || (url.pathname === '/api/socialV2/feedback' && req.method === 'GET') || (url.pathname === '/api/socialV2/tool-log' && req.method === 'GET'))) {
           sendJson({ ok: false, error: '该接口仅控制台可用' }, 403);
           return;
@@ -5117,6 +5117,50 @@ async function main() {
           }
           log('控制台：二代仿真配置已更新');
           sendJson({ ok: true, config: cfg.socialV2 });
+          return;
+        }
+        // 手动「让它现在就主动说一句」：跳过概率/间隔/每日上限，但仍受白名单约束。
+        // force=true 时连静默时段也放行（管理员在面板上显式点的，视为明确意图）。
+        if (req.method === 'POST' && url.pathname === '/api/socialV2/proactive-now') {
+          const body = await readBody();
+          const rawKey = String(body?.key ?? '').trim();
+          const key = canonicalV2Key(rawKey) ?? rawKey;
+          if (!/^(group|private):[0-9]{5,15}$/.test(key)) {
+            sendJson({ ok: false, error: '目标不合法：只接受 group:群号 或 private:QQ 号' }, 400);
+            return;
+          }
+          if (!isSessionAllowedInCurrentMode(key)) {
+            sendJson({ ok: false, error: '这个会话不在允许范围内，先到「对话范围」里加上它' }, 403);
+            return;
+          }
+          const force = body?.force === true;
+          const quietNow = quietHours.status();
+          if (!force && quietNow.state && quietNow.state !== 'normal') {
+            const until = quietNow.until ? '（' + new Date(quietNow.until).toLocaleTimeString('zh-CN', { hour12: false }) + ' 结束）' : '';
+            sendJson({ ok: false, code: 'quiet', error: '现在是静默时段' + until + '，要发请勾上「静默时段也发」' }, 409);
+            return;
+          }
+          const st = getSocialV2State(key);
+          if (isConversationBusyV2(key, st)) {
+            // 正忙：排队，等这一轮结束再补一次（reason 复用 proactiveCheck，行为与自动触发一致）。
+            if (!Array.isArray(st.pendingWakeReasons)) st.pendingWakeReasons = [];
+            const seq = Number(st.lastIncomingAt || 0);
+            if (!st.pendingWakeReasons.some((r) => r && r.reason === 'proactiveCheck' && r.seq === seq)) {
+              st.pendingWakeReasons.push({ reason: 'proactiveCheck', seq });
+              if (st.pendingWakeReasons.length > 20) st.pendingWakeReasons.splice(0, st.pendingWakeReasons.length - 20);
+            }
+            saveSocialV2State();
+            log(`[reserved2] 手动主动搭话：${key} 正忙，已排队`);
+            sendJson({ ok: true, queued: true });
+            return;
+          }
+          st.proactiveWakePendingAt = Date.now();
+          // 打上「这次是手动触发的」标记：消息真发出去后 recordSentMessagesV2 不累加每天额度。
+          st.proactiveManualAt = Date.now();
+          saveSocialV2State();
+          log(`[reserved2] 手动主动搭话：${key}${force ? '（静默时段强发）' : ''}`);
+          void sendWakePromptV2(key, 'proactiveCheck').catch((error) => log(`[reserved2] 手动主动搭话唤醒异常 ${key}:`, error?.message ?? error));
+          sendJson({ ok: true, woke: true });
           return;
         }
         if (req.method === 'GET' && url.pathname === '/api/socialV2/activity') {
@@ -9131,6 +9175,7 @@ async function main() {
         proactiveDay: '',
         proactiveCountToday: 0,
         proactiveWakePendingAt: 0,
+        proactiveManualAt: 0,
         // 夜间催睡：记录已经发过的那一天（本地日 key），以及正在发送的防重入标记。
         nightStickerDay: '',
         nightStickerTextDay: '',
@@ -9207,6 +9252,7 @@ async function main() {
             proactiveDay: String(val.proactiveDay ?? ''),
             proactiveCountToday: Number(val.proactiveCountToday) || 0,
             proactiveWakePendingAt: Number(val.proactiveWakePendingAt) || 0,
+            proactiveManualAt: Number(val.proactiveManualAt) || 0,
             nightStickerDay: String(val.nightStickerDay ?? ''),
             nightStickerTextDay: String(val.nightStickerTextDay ?? ''),
             nightStickerBusy: false,
@@ -9303,6 +9349,7 @@ async function main() {
           proactiveDay: st.proactiveDay || '',
           proactiveCountToday: st.proactiveCountToday || 0,
           proactiveWakePendingAt: st.proactiveWakePendingAt || 0,
+          proactiveManualAt: st.proactiveManualAt || 0,
           nightStickerDay: st.nightStickerDay || '',
           nightStickerTextDay: st.nightStickerTextDay || '',
           preSleepWaitSatisfiedAt: st.preSleepWaitSatisfiedAt || 0,
@@ -10638,7 +10685,10 @@ async function main() {
         st.proactiveCountToday = 0;
       }
       st.proactiveSentAt = now;
-      st.proactiveCountToday = Number(st.proactiveCountToday || 0) + 1;
+      // 手动触发的这次不占每天自动搭话的额度（面板上点了「现在就说」不算她的主动次数）。
+      const manualTrigger = st.proactiveManualAt && now - Number(st.proactiveManualAt) < 10 * 60 * 1000;
+      if (!manualTrigger) st.proactiveCountToday = Number(st.proactiveCountToday || 0) + 1;
+      else st.proactiveManualAt = 0;
       st.proactiveWakePendingAt = 0;
       saveSocialV2State();
     }

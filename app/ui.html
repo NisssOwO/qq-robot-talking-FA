@@ -373,6 +373,7 @@ pre { margin: 0; padding: 12px 16px; background: var(--surface-sunken); border: 
   color: var(--muted); font-size: 12.5px; cursor: pointer; user-select: none; line-height: 1.7; }
 .chip:hover { border-color: var(--accent); color: var(--accent); }
 .chip.on { border-color: transparent; color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.field input[type="checkbox"], .field input[type="radio"], .choice input[type="checkbox"], .choice input[type="radio"] { width: auto; flex: 0 0 auto; margin: 2px 0 0; accent-color: var(--accent); }
 .field-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px 14px; }
 .field-actions .hint { margin: 0; }
 
@@ -1144,6 +1145,24 @@ chatView.innerHTML = head('CHAT BEHAVIOR', '聊天行为', '她什么时候自�
   </div>
   <div class="field-actions"><button class="btn primary" id="sp-save">保存说话上限</button><span class="hint" id="sp-toast"></span></div>
 </div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">立即主动一次</div><div class="spacer"></div>
+    <span class="count">手动触发，不计入每天上限</span></div>
+  <div class="formgrid">
+    <div class="field"><label>对谁说</label>
+      <select id="pa-target"></select>
+      <div class="hint">只列「对话范围」里启用的群和好友</div></div>
+    <div class="field"><label>&nbsp;</label>
+      <label class="choice" style="border:0;padding:0;background:transparent">
+        <input type="checkbox" id="pa-force">
+        <span class="choice-txt"><b>静默时段也发</b>不勾的话，静默时段会被挡下来</span></label></div>
+  </div>
+  <div class="field-actions">
+    <button class="btn primary" id="pa-now">现在就说</button>
+    <span class="hint" id="pa-now-hint">点下去它会被叫醒，自己挑个由头开口，约 3～10 秒出现在群里</span>
+  </div>
+</div>
 `;
 $('main').appendChild(chatView);
 
@@ -1872,6 +1891,7 @@ async function loadChat() {
   } catch (e) {
     toast('', '读不到聊天设置：' + (e && e.message ? e.message : e), true);
   }
+  void loadChatTargets();
 }
 
 async function saveChatProactive() {
@@ -2224,6 +2244,69 @@ if ($('sc-g-save')) $('sc-g-save').onclick = () => void saveScope('sc-g-save', '
 if ($('sc-p-save')) $('sc-p-save').onclick = () => void saveScope('sc-p-save', 'sc-p-toast');
 if ($('pa-save')) $('pa-save').onclick = () => void saveChatProactive();
 if ($('sp-save')) $('sp-save').onclick = () => void saveChatSend();
+
+// ── 立即主动一次：目标只取白名单里启用的群/好友 ─────────────────────
+async function loadChatTargets() {
+  const sel = $('pa-target');
+  if (!sel) return;
+  try {
+    const r = await api('status');
+    const cfg = r.config || {};
+    const names = cfg.names || {};
+    const canGroup = cfg.proactiveGroup !== false;
+    const opts = [];
+    for (const g of (cfg.groups || [])) {
+      const label = names[String(g)] ? ('群 ' + g + '（' + names[String(g)] + '）') : ('群 ' + g);
+      opts.push({ v: 'group:' + g, t: label + (canGroup ? '' : '（群内主动已关）') });
+    }
+    for (const p of (cfg.private || [])) {
+      const label = names[String(p)] ? ('私聊 ' + p + '（' + names[String(p)] + '）') : ('私聊 ' + p);
+      opts.push({ v: 'private:' + p, t: label + (cfg.proactivePrivate ? '' : '（私聊主动默认关，手动仍可发）') });
+    }
+    const keep = sel.value;
+    sel.innerHTML = opts.length
+      ? opts.map((o) => '<option value="' + scopeEsc(o.v) + '">' + scopeEsc(o.t) + '</option>').join('')
+      : '<option value="">（对话范围里还没有启用的群或好友）</option>';
+    if (keep && opts.some((o) => o.v === keep)) sel.value = keep;
+  } catch (e) {
+    const sel2 = $('pa-target');
+    if (sel2) sel2.innerHTML = '<option value="">（读取失败：' + scopeEsc(e?.message ?? String(e)) + '）</option>';
+  }
+}
+
+async function fireProactiveNow() {
+  const sel = $('pa-target');
+  const btn = $('pa-now');
+  const hint = $('pa-now-hint');
+  const key = sel ? String(sel.value || '') : '';
+  if (!key) {
+    if (hint) hint.textContent = '先在「对话范围」里加一个群或好友';
+    return;
+  }
+  if (btn) btn.disabled = true;
+  if (hint) hint.textContent = '正在叫醒它…';
+  try {
+    const r = await consoleFetch('/api/socialV2/proactive-now', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key, force: !!($('pa-force') && $('pa-force').checked) })
+    });
+    if (r && r.queued) {
+      if (hint) hint.textContent = '它这一轮正忙，已排队，等这轮结束会补一次。';
+    } else {
+      const t = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      if (hint) hint.textContent = '已触发（' + t + '）——它会自己挑由头开口，几秒后看群里。';
+      toast('pa-now-hint', '已触发一次主动搭话', false);
+    }
+  } catch (e) {
+    const msg = String(e?.message ?? e);
+    if (hint) hint.textContent = '没发出去：' + msg;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+if ($('pa-now')) $('pa-now').onclick = () => void fireProactiveNow();
+
 $('btn-log-bridge').onclick = () => { logWhich = 'bridge'; loadLogs(); };
 function setLogSrc(src) {
   logWhich = src;
