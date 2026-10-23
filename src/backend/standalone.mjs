@@ -272,6 +272,27 @@ export function createStandaloneBackend(cfg, { log = () => {} } = {}) {
     throw new Error(`standalone 未知的 llm.protocol：${protocol}`);
   }
 
+  /**
+   * OpenAI 兼容接口的 usage 字段名和账本不一致：这边是 prompt_tokens/completion_tokens，
+   * 账本（src/model-prices.js 的 normalizeUsage）认 cacheMiss/cacheHit/output/reasoning。
+   * 不转的话 totals 永远是 0——「令牌与花费」页整页显示 ¥0，就是这个原因。
+   */
+  function ledgerUsageOf(usage) {
+    if (!usage || typeof usage !== 'object') return null;
+    const prompt = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0);
+    const cached = Number(usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens ?? 0);
+    const output = Number(usage.completion_tokens ?? usage.output_tokens ?? 0);
+    const reasoning = Number(usage.completion_tokens_details?.reasoning_tokens ?? usage.reasoning_tokens ?? 0);
+    if (!prompt && !output) return null;
+    return {
+      cacheMiss: Math.max(0, prompt - cached),
+      cacheHit: Math.max(0, cached),
+      cacheWrite: 0,
+      output: Math.max(0, output),
+      reasoning: Math.max(0, reasoning)
+    };
+  }
+
   // ── 上下文管理：固定 system + 最近原文 + 旧段落丢弃 ────────────────────────
   function buildRequestMessages(s) {
     const systemParts = [];
@@ -343,39 +364,53 @@ export function createStandaloneBackend(cfg, { log = () => {} } = {}) {
         const text = String(reply.content ?? '').trim();
         if (text) {
           s.messages.push({ role: 'assistant', content: text });
+          const usageBuckets = ledgerUsageOf(reply.usage);
           emit(s.id, {
             type: 'assistant/message',
-            data: { turn, message: { role: 'assistant', content: [{ type: 'text', text }] } }
+            data: {
+              turn,
+              step,
+              model: llmConfig().model,
+              provider: 'standalone',
+              ...(usageBuckets ? { usage: usageBuckets } : {}),
+              message: { role: 'assistant', content: [{ type: 'text', text }] }
+            }
           });
           finalText += text;
         }
         if (!reply.toolCalls.length) break;
 
+        // 模型给的 tool_call id 每轮都从 call_0 重新数，跨轮会重复。
+        // 历史里堆着多轮相同的 id 时，接口会报 "tool_call_id does not match"，
+        // 所以这里自己发号，assistant 的 tool_calls 和 tool 结果用同一个新 id。
+        const callIds = reply.toolCalls.map((_tc, i) => `call_${turn}_${i}_${Math.random().toString(16).slice(2, 8)}`);
         const assistantMsg = { role: 'assistant', content: reply.content ?? '' };
-        assistantMsg.tool_calls = reply.toolCalls.map((tc) => ({
-          id: tc.id,
+        assistantMsg.tool_calls = reply.toolCalls.map((tc, i) => ({
+          id: callIds[i],
           type: 'function',
           function: { name: tc.function?.name ?? '', arguments: tc.function?.arguments ?? '{}' }
         }));
         s.messages.push(assistantMsg);
 
-        for (const tc of reply.toolCalls) {
+        for (let i = 0; i < reply.toolCalls.length; i += 1) {
+          const tc = reply.toolCalls[i];
+          const callId = callIds[i];
           const name = tc.function?.name ?? '';
           const args = parseToolArgs(tc.function?.arguments);
-          emit(s.id, { type: 'tool/call', data: { name, callId: tc.id, arguments: args } });
+          emit(s.id, { type: 'tool/call', data: { name, callId, arguments: args } });
           const result = await tools.call(name, args);
           emit(s.id, {
             type: 'tool/result',
             data: {
               message: {
                 role: 'tool',
-                source: { callId: tc.id, name },
+                source: { callId, name },
                 content: [{ type: 'text', text: result.text, isError: result.isError }],
                 isError: result.isError
               }
             }
           });
-          s.messages.push({ role: 'tool', tool_call_id: tc.id, content: result.text });
+          s.messages.push({ role: 'tool', tool_call_id: callId, content: result.text });
         }
       }
     } catch (error) {

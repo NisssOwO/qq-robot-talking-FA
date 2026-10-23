@@ -98,6 +98,12 @@ export const DEFAULT_PRICE_TABLE = {
       label: 'DeepSeek-V4.1-Flash',
       off: { cacheHit: 0.02, cacheMiss: 1, cacheWrite: 1, output: 4 }
     },
+    // 中转/网关常把模型名带上版本号（deepseek-v4.1-flash-1017），
+    // 不单独列一条就会一直走兜底价、把每次花费都标成「估算」。
+    'deepseek-v4.1-flash': {
+      label: 'DeepSeek-V4.1-Flash',
+      off: { cacheHit: 0.02, cacheMiss: 1, cacheWrite: 1, output: 4 }
+    },
     'deepseek-v4-flash': {
       label: 'DeepSeek-V4.1-Flash（旧模型名）',
       off: { cacheHit: 0.02, cacheMiss: 1, cacheWrite: 1, output: 4 }
@@ -181,7 +187,13 @@ export function isPeakAt(atMs, table = DEFAULT_PRICE_TABLE) {
 /** 取某模型在某一时刻生效的单价（含峰谷判定）。 */
 export function ratesAt(model, atMs, table = DEFAULT_PRICE_TABLE) {
   const key = String(model ?? '').trim();
-  const entry = table.models[key];
+  let entry = table.models[key];
+  if (!entry) {
+    // 模型名常带日期/版本后缀（如 deepseek-v4.1-flash-1017），去掉再试一次；
+    // 否则每个带后缀的名字都会落到兜底价，控制台还会一直标「估算」。
+    const stripped = key.replace(/[-_][0-9]{2,}(?:[-_][0-9]+)*$/, '');
+    if (stripped && stripped !== key) entry = table.models[stripped];
+  }
   const chosen = entry ?? table.models[table.fallbackModel];
   const off = chosen.off;
   const peak = isPeakAt(atMs, table);

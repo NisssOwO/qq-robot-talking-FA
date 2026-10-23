@@ -230,32 +230,13 @@ partial class MainForm : Form
     // 这里读系统的「应用模式」设置，把它同步给 WebView2，夜间模式才会跟系统走。
     void ApplyColorScheme()
     {
-        bool dark = false;
-        string forced = Settings.Theme;
-        if (forced == "dark") dark = true;
-        else if (forced == "light") dark = false;
-        else
-        {
-            try
-            {
-                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
-                    @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
-                {
-                    if (key != null)
-                    {
-                        object v = key.GetValue("AppsUseLightTheme");
-                        if (v != null) dark = Convert.ToInt32(v) == 0;
-                    }
-                }
-            }
-            catch { }
-        }
+        // 面板只保留深色一套配色（与 ui.html 的 :root 变量一致），
+        // 不再读系统主题、也不读 state/ui.json 的 theme —— WebView2 的
+        // PreferredColorScheme 只影响表单控件与滚动条，必须跟 CSS 对齐。
         try
         {
-            web.CoreWebView2.Profile.PreferredColorScheme = dark
-                ? CoreWebView2PreferredColorScheme.Dark
-                : CoreWebView2PreferredColorScheme.Light;
-            Program.Log("配色方案：" + (dark ? "深色" : "浅色") + (forced == "auto" ? "（跟随系统）" : "（手动设置）"));
+            web.CoreWebView2.Profile.PreferredColorScheme = CoreWebView2PreferredColorScheme.Dark;
+            Program.Log("配色方案：深色（固定）");
         }
         catch (Exception ex) { Program.Log("设置配色失败：" + ex.Message); }
     }

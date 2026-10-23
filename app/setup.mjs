@@ -20,6 +20,12 @@ const ROOT = path.resolve(APP_DIR, '..');
 const CONFIG_PATH = process.env.QQ_BOT_CONFIG || path.join(ROOT, 'config.json');
 const OPEN_BROWSER = !process.argv.includes('--no-open');
 
+// 主题变量与面板（app/ui.html）共用同一份 app/theme.css，视觉保持一致；
+// 改色只改那一个文件。读不到时用空串，向导自己的规则不受影响。
+const THEME_CSS = (() => {
+  try { return fs.readFileSync(path.join(APP_DIR, 'theme.css'), 'utf8'); } catch { return ''; }
+})();
+
 const DEFAULTS = {
   backend: 'standalone',
   llm: {
@@ -116,28 +122,27 @@ function renderPage(cfg, notice = '') {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>七草叶月 · 配置向导</title>
+<title>QQ 聊天机器人 · 配置向导</title>
 <style>
-  :root { color-scheme: light dark; --bg:#f7f7f5; --card:#fff; --ink:#1d1d1f; --muted:#6b6b70; --line:#e2e2df; --accent:#2f6f4f; --accent-ink:#fff; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#161618; --card:#1f1f22; --ink:#ececee; --muted:#9a9aa0; --line:#33333a; --accent:#5fbf8f; --accent-ink:#0d1a13; } }
+${THEME_CSS}
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.65 "Segoe UI","Noto Sans SC",system-ui,sans-serif; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.65 "Segoe UI","Noto Sans SC",system-ui,sans-serif; }
   .wrap { max-width: 820px; margin: 0 auto; padding: 40px 20px 80px; }
   h1 { font-size: 22px; margin: 0 0 4px; letter-spacing:.02em; }
   .sub { color: var(--muted); font-size: 13px; margin-bottom: 28px; }
-  section { background: var(--card); border:1px solid var(--line); border-radius: 14px; padding: 20px 22px; margin-bottom: 16px; }
+  section { background: var(--surface); border:1px solid var(--border); border-radius: 14px; padding: 20px 22px; margin-bottom: 16px; }
   h2 { font-size: 13px; letter-spacing:.12em; text-transform: uppercase; color: var(--muted); margin: 0 0 16px; font-weight: 600; }
   label { display:block; font-size: 13px; color: var(--muted); margin: 12px 0 6px; }
-  input, select, textarea { width:100%; padding: 9px 11px; border-radius: 9px; border:1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-size: 14px; }
+  input, select, textarea { width:100%; padding: 9px 11px; border-radius: 9px; border:1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; font-size: 14px; }
   textarea { min-height: 72px; resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
   input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
-  .badge { display:inline-block; font-size:12px; padding:2px 8px; border-radius: 999px; border:1px solid var(--line); color:var(--muted); }
+  .badge { display:inline-block; font-size:12px; padding:2px 8px; border-radius: 999px; border:1px solid var(--border); color:var(--muted); }
   .badge.ok { color: var(--accent); border-color: var(--accent); }
   .actions { display:flex; gap: 12px; align-items:center; margin-top: 8px; }
-  button { cursor:pointer; border-radius: 10px; padding: 11px 20px; font: inherit; font-size:14px; border:1px solid var(--line); background: var(--card); color: var(--ink); }
-  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button { cursor:pointer; border-radius: 10px; padding: 11px 20px; font: inherit; font-size:14px; border:1px solid var(--border); background: var(--surface); color: var(--text); }
+  button.primary { background: var(--accent); color: var(#fff); border-color: var(--accent); font-weight: 600; }
   button:disabled { opacity:.5; cursor: default; }
   .toast { margin-top: 14px; font-size: 13px; min-height: 20px; color: var(--accent); }
   .toast.err { color: #c2410c; }

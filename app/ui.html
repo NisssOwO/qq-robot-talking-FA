@@ -5,204 +5,441 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>QQ 聊天机器人控制台</title>
 <style>
-  :root {
-    /* 与桥接控制台（public/console.html）同一套设计变量，两个界面看起来是一件东西 */
-    --bg:#f7f8fb; --surface:#fff; --surface-subtle:#fafbfe; --surface-hover:#f5f6fa;
-    --card-border:#e4e9f1; --border:#dfe4ed; --text:#202635; --text-strong:#293044;
-    --text-secondary:#5f6a7d; --muted:#5d6878; --muted-soft:#828da1; --placeholder:#929bad;
-    --accent:#4d6bfe; --accent-hover:#405de5; --accent-soft-bg:#edf1ff; --accent-soft-fg:#405ee6;
-    --accent-border-soft:#c8d4ff; --ok:#1f8a5b; --warn:#b45309; --bad:#c0392b;
-    --mono: ui-monospace,"Cascadia Mono",Consolas,"Noto Sans Mono",monospace;
-    color-scheme: light;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme]) {
-      --bg:#15171d; --surface:#1b1e26; --surface-subtle:#20242d; --surface-hover:#252a34;
-      --card-border:#2c313c; --border:#333846; --text:#e7eaf1; --text-strong:#f2f4f9;
-      --text-secondary:#a2abbb; --muted:#98a1b2; --muted-soft:#7d8698; --placeholder:#6f7889;
-      --accent:#7d92ff; --accent-hover:#93a4ff; --accent-soft-bg:#232a44; --accent-soft-fg:#a9b8ff;
-      --accent-border-soft:#3a4468; --ok:#4cc38a; --warn:#e0a458; --bad:#e5776b;
-      color-scheme: dark;
-    }
-  }
-  /* 手动切主题：覆盖上面的媒体查询 */
-  :root[data-theme="dark"] {
-    --bg:#15171d; --surface:#1b1e26; --surface-subtle:#20242d; --surface-hover:#252a34;
-    --card-border:#2c313c; --border:#333846; --text:#e7eaf1; --text-strong:#f2f4f9;
-    --text-secondary:#a2abbb; --muted:#98a1b2; --muted-soft:#7d8698; --placeholder:#6f7889;
-    --accent:#7d92ff; --accent-hover:#93a4ff; --accent-soft-bg:#232a44; --accent-soft-fg:#a9b8ff;
-    --accent-border-soft:#3a4468; --ok:#4cc38a; --warn:#e0a458; --bad:#e5776b;
-    color-scheme: dark;
-  }
-  :root[data-theme="light"] {
-    --bg:#f7f8fb; --surface:#fff; --surface-subtle:#fafbfe; --surface-hover:#f5f6fa;
-    --card-border:#e4e9f1; --border:#dfe4ed; --text:#202635; --text-strong:#293044;
-    --text-secondary:#5f6a7d; --muted:#5d6878; --muted-soft:#828da1; --placeholder:#929bad;
-    --accent:#4d6bfe; --accent-hover:#405de5; --accent-soft-bg:#edf1ff; --accent-soft-fg:#405ee6;
-    --accent-border-soft:#c8d4ff; --ok:#1f8a5b; --warn:#b45309; --bad:#c0392b;
-    color-scheme: light;
-  }
-  * { box-sizing: border-box; }
-  html, body { height:100%; margin:0; }
-  body {
-    display:grid; grid-template-columns: 236px 1fr; height:100vh; overflow:hidden;
-    background:var(--bg); color:var(--text);
-    font:14px/1.62 "Segoe UI","Noto Sans SC","PingFang SC",system-ui,-apple-system,sans-serif;
-    -webkit-font-smoothing: antialiased;
-  }
+:root {
+  --bg: #12151c;
+  --surface: #1a1f29;
+  --surface-sunken: #151a23;
+  --border: #2a3242;
+  --text: #e6ebf3;
+  --muted: #8d99ac;
+  --accent: #6f8bff;
+  --accent-soft: #202a44;
+  --ok: #47b57d;
+  --ok-soft: #16281f;
+  --warn: #e0993f;
+  --warn-soft: #2a2114;
+  --err: #e26a6a;
+  --err-soft: #2c1a1a;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 30px rgba(0, 0, 0, .35);
+  color-scheme: dark;
+}
+:root
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; font: 14px/1.55 "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased;
+  display: flex; overflow: hidden;
+}
 
-  /* ── 左栏 ───────────────────────────────────────────── */
-  aside {
-    background:var(--surface); border-right:1px solid var(--card-border);
-    padding:22px 14px 16px; display:flex; flex-direction:column; overflow-y:auto;
-  }
-  aside::-webkit-scrollbar { width:0; }
-  .brand { display:flex; align-items:center; gap:10px; padding:0 8px 18px; }
-  .brand-mark {
-    width:30px; height:30px; border-radius:9px; background:var(--accent); color:#fff;
-    display:grid; place-items:center; font-weight:700; font-size:15px; flex:0 0 auto;
-    box-shadow:0 2px 8px color-mix(in srgb, var(--accent) 28%, transparent);
-  }
-  .brand-text b { display:block; font-size:14px; letter-spacing:.01em; color:var(--text-strong); }
-  .brand-text small { display:block; font-size:11px; color:var(--muted-soft); margin-top:1px; }
 
-  .nav-group { font-size:10.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--muted-soft); padding:14px 10px 7px; font-weight:600; }
-  .nav-item {
-    display:flex; align-items:center; gap:9px; width:100%; text-align:left; cursor:pointer;
-    border:1px solid transparent; background:transparent; color:var(--text-secondary);
-    font:inherit; font-size:13px; padding:8px 10px; border-radius:9px; margin-bottom:1px;
-  }
-  .nav-item .ico { width:16px; text-align:center; color:var(--muted-soft); font-size:12px; flex:0 0 auto; }
-  .nav-item:hover { background:var(--surface-hover); color:var(--text); }
-  .nav-item.active {
-    background:var(--accent-soft-bg); color:var(--accent-soft-fg); font-weight:600;
-    border-color:var(--accent-border-soft);
-  }
-  .nav-item.active .ico { color:var(--accent); }
-  .nav-item .badge { margin-left:auto; font-size:10.5px; color:var(--muted-soft); }
+/* ── 左导航 ── */
+aside { width: 236px; flex: 0 0 236px; background: var(--surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; height: 100vh; }
+.brand { padding: 18px 18px 14px; font-weight: 650; font-size: 14px; display: flex; align-items: center; gap: 9px; }
+.brand-mark { width: 22px; height: 22px; border-radius: 7px; background: linear-gradient(150deg, var(--accent), #7c93ff);
+  display: grid; place-items: center; color: #fff; font-size: 12px; font-weight: 700; }
+.nav { padding: 4px 10px 10px; overflow-y: auto; flex: 1; }
+.nav-group { padding: 12px 8px 6px; font-size: 11px; letter-spacing: .8px; color: var(--muted); text-transform: uppercase; font-weight: 600; }
+.nav-item { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 8px;
+  cursor: pointer; font-size: 13.5px; user-select: none; position: relative; }
+.nav-item:hover { background: var(--surface-sunken); }
+.nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.nav-item.active::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--accent); }
+.nav-item svg { width: 16px; height: 16px; flex: 0 0 16px; stroke: currentColor; fill: none;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; opacity: .85; }
+.nav-item.dim { color: var(--muted); opacity: .55; cursor: default; }
+.nav-item.dim:hover { background: transparent; }
+.side-foot { border-top: 1px solid var(--border); padding: 10px; }
 
-  .aside-foot { margin-top:auto; padding:16px 10px 0; border-top:1px solid var(--border); }
-  .theme-row { padding:10px 6px 0; }
-  .theme-row button {
-    width:100%; display:flex; align-items:center; gap:6px; justify-content:center;
-    padding:7px 10px; border:1px solid var(--border); border-radius:8px;
-    background:var(--surface); color:var(--text-secondary); font:12px/1 inherit; cursor:pointer;
-  }
-  .theme-row button:hover { background:var(--surface-hover); color:var(--text); }
-  .aside-foot .dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--muted-soft); margin-right:6px; vertical-align:1px; }
-  .aside-foot .dot.ok { background:var(--ok); }
-  .aside-foot .dot.warn { background:var(--warn); }
-  .aside-foot .dot.bad { background:var(--bad); }
-  .aside-foot span { font-size:11.5px; color:var(--muted); }
-  .aside-foot small { display:block; font-size:10.5px; color:var(--muted-soft); margin-top:3px; }
+/* ── 主区 ── */
+main { flex: 1 1 auto; min-width: 0; height: 100vh; overflow-y: auto; }
+.view { display: block; }
+.view[hidden] { display: none !important; }
+.view.on { display: block; }
+.head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 16px; }
+.eyebrow { font-size: 11px; letter-spacing: 1.2px; color: var(--muted); font-weight: 600; text-transform: uppercase; }
+h1 { margin: 4px 0 4px; font-size: 21px; font-weight: 650; letter-spacing: -.2px; }
+.sub { color: var(--muted); font-size: 13px; max-width: 560px; margin: 0; }
 
-  /* ── 右侧内容 ───────────────────────────────────────── */
-  main { position:relative; overflow:hidden; }
-  .view { position:absolute; inset:0; overflow:auto; }
-  .view[hidden] { display:none; }
-  .view.pad { padding:26px 30px 40px; }
-  .view > iframe { width:100%; height:100%; border:0; display:block; background:var(--bg); }
-  .view.empty-state { display:grid; place-items:center; color:var(--muted); font-size:13px; text-align:center; padding:40px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow); margin-bottom: 16px; overflow: hidden; }
+.card-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.card-title { font-weight: 640; font-size: 14.5px; display: flex; align-items: center; gap: 8px; }
+.count { font-size: 11.5px; font-weight: 600; color: var(--muted); background: var(--surface-sunken);
+  border: 1px solid var(--border); padding: 1px 7px; border-radius: 999px; }
+.card-head .spacer { flex: 1; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.grid > .span2 { grid-column: span 2; }
 
-  .head { margin-bottom:20px; }
-  .eyebrow { font-size:10.5px; letter-spacing:.18em; text-transform:uppercase; color:var(--muted-soft); font-weight:600; }
-  .head h1 { font-size:22px; letter-spacing:-.01em; margin:6px 0 5px; color:var(--text-strong); font-weight:650; }
-  .head p { margin:0; color:var(--text-secondary); font-size:13px; }
+/* ── 状态灯 ── */
+.led { width: 8px; height: 8px; border-radius: 50%; background: #b8bfcc; flex: 0 0 8px;
+  display: inline-block; transition: background .2s, box-shadow .2s; }
+.led.ok { background: var(--ok); box-shadow: 0 0 0 3px rgba(47, 158, 99, .16); }
+.led.warn { background: var(--warn); box-shadow: 0 0 0 3px rgba(217, 131, 36, .16); }
+.led.err { background: var(--err); box-shadow: 0 0 0 3px rgba(214, 69, 69, .16); }
 
-  .grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:16px; align-items:start; }
-  .card {
-    background:var(--surface); border:1px solid var(--card-border); border-radius:14px;
-    padding:18px 20px; box-shadow:0 1px 2px rgba(16,24,40,.03);
-  }
-  .card.span2 { grid-column:1 / -1; }
-  .card h2 {
-    font-size:10.5px; letter-spacing:.15em; text-transform:uppercase; color:var(--muted-soft);
-    margin:0 0 14px; font-weight:600;
-  }
-  .metric { display:grid; grid-template-columns:repeat(4, minmax(0,1fr)); gap:12px; }
-  .metric > div { padding:12px 14px; border:1px solid var(--border); border-radius:11px; background:var(--surface-subtle); }
-  .metric span { font-size:11.5px; color:var(--muted); display:block; }
-  .metric strong { font-size:15px; color:var(--text-strong); font-weight:650; }
-  .metric small { display:block; font-size:10.5px; color:var(--muted-soft); margin-top:2px; }
+/* 状态长条 */
+.live, .live-top { display: flex; align-items: center; gap: 16px; padding: 16px 18px; flex-wrap: wrap; }
+.live .led, .live-top .led { width: 13px; height: 13px; flex: 0 0 13px; }
+.live-state { font-size: 21px; font-weight: 650; letter-spacing: .01em; line-height: 1.25; }
+.live-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.live-facts { margin-left: auto; display: flex; gap: 26px; text-align: right; flex-wrap: wrap; }
+.live-facts div span { display: block; font-size: 11.5px; color: var(--muted); }
+.live-facts div strong { font-size: 13.5px; font-weight: 620; }
 
-  .rowline { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 0; border-bottom:1px dashed var(--border); }
-  .rowline:last-of-type { border-bottom:0; }
-  .rowline .who { display:flex; align-items:center; gap:10px; min-width:0; }
-  .rowline .name { font-size:13.5px; font-weight:600; color:var(--text-strong); }
-  .rowline .meta { font-size:11.5px; color:var(--muted); }
-  .led { width:8px; height:8px; border-radius:50%; background:var(--muted-soft); flex:0 0 auto; box-shadow:0 0 0 3px color-mix(in srgb, var(--muted-soft) 16%, transparent); }
-  .led.ok { background:var(--ok); box-shadow:0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent); }
-  .led.warn { background:var(--warn); box-shadow:0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent); }
-  .led.bad { background:var(--bad); box-shadow:0 0 0 3px color-mix(in srgb, var(--bad) 18%, transparent); }
+/* 要点列表 */
+.tips { padding: 6px 16px 14px; }
+.tip { display: flex; gap: 12px; padding: 9px 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
+.tip:last-child { border-bottom: 0; }
+.tip b { flex: 0 0 96px; font-weight: 620; font-size: 12.5px; color: var(--text); }
+.tip span { color: var(--muted); }
 
-  button {
-    cursor:pointer; font:inherit; font-size:12.5px; border-radius:9px; padding:7px 13px;
-    border:1px solid var(--border); background:var(--surface); color:var(--text); white-space:nowrap;
-  }
-  button:hover:not(:disabled) { border-color:var(--accent-border-soft); color:var(--text-strong); }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
-  button.primary:hover:not(:disabled) { background:var(--accent-hover); border-color:var(--accent-hover); }
-  button.danger { color:var(--bad); border-color:color-mix(in srgb, var(--bad) 32%, var(--border)); }
-  button:disabled { opacity:.42; cursor:default; }
-  .btns { display:flex; gap:7px; flex:0 0 auto; }
+/* 一排绿灯 */
+.conn { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); background: transparent; }
+.conn-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-sunken); }
+.conn-item:last-child { border-right: 0; }
+.conn-name { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conn-sub { display: flex; align-items: baseline; gap: 1px; }
+.conn-port { font: 11.5px "Cascadia Mono", Consolas, monospace; color: var(--muted); }
+.conn-state { font-family: inherit; font-size: 11.5px; font-weight: 650; }
+.conn-state.ok { color: var(--ok); }
+.conn-state.warn { color: var(--warn); }
+.conn-state.ond { color: var(--muted); }
 
-  label { display:block; font-size:11.5px; color:var(--muted); margin:13px 0 6px; }
-  label:first-of-type { margin-top:0; }
-  input, textarea {
-    width:100%; padding:8px 11px; border-radius:9px; border:1px solid var(--border);
-    background:var(--surface); color:var(--text); font:inherit; font-size:13px;
-  }
-  input:focus, textarea:focus { outline:0; border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
-  textarea { min-height:66px; resize:vertical; font-family:var(--mono); font-size:12px; line-height:1.6; }
-  .two { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-  .hint { font-size:11px; color:var(--muted-soft); margin-top:5px; }
-  .hint code { font-family:var(--mono); font-size:11px; }
-  .choice {
-    display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text);
-    margin:11px 0 0; cursor:pointer; line-height:1.4;
-  }
-  .choice input[type=radio] { width:auto; flex:0 0 auto; margin:0; accent-color:var(--accent); }
+/* 进程行 */
+.proc-row { display: grid; grid-template-columns: 10px 1fr auto auto; gap: 14px; align-items: center;
+  padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.proc-row:hover { background: var(--surface-sunken); }
+.proc-row > .led { width: 9px; height: 9px; flex: 0 0 9px; }
+.proc-main { min-width: 0; }
+.proc-name { font-weight: 620; font-size: 13.5px; }
+.proc-meta { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.proc-side { display: flex; gap: 20px; }
+.proc-kv span { display: block; font-size: 11px; color: var(--muted); }
+.proc-kv strong { font-size: 12.5px; font-weight: 600; }
+.btns { display: flex; gap: 6px; }
 
-  pre {
-    margin:0; padding:12px 14px; background:var(--surface-subtle); border:1px solid var(--border);
-    border-radius:10px; font-family:var(--mono); font-size:11px; line-height:1.6;
-    max-height:250px; overflow:auto; white-space:pre-wrap; word-break:break-all; color:var(--text-secondary);
-  }
-  .toast { font-size:12px; min-height:17px; margin-top:10px; color:var(--ok); }
-  .toast.err { color:var(--bad); }
-  .steps { margin:12px 0 0; padding-left:17px; color:var(--muted); font-size:12px; }
-  .steps li { margin:2px 0; }
+/* 侧栏底部 */
+.side-foot .nav-item { width: 100%; border: 0; background: transparent; color: var(--muted); }
+.side-foot .nav-item:hover { background: var(--surface-sunken); color: var(--text); }
+.foot-row { display: flex; align-items: center; gap: 6px; padding: 8px 10px 2px; font-size: 12px; color: var(--muted); }
+.foot-row .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: 0 0 7px; }
+.foot-row .dot.ok { background: var(--ok); }
+.foot-row .dot.err { background: var(--bad); }
+.foot-sub { padding: 0 10px 4px; font-size: 11px; color: var(--muted); opacity: .8; }
 
-  /* 破坏性操作确认层 */
-  #confirm-mask { position:fixed; inset:0; background:rgba(15,20,32,.36); display:flex; align-items:center; justify-content:center; z-index:9999; }
-  #confirm-mask[hidden] { display:none; }
-  .confirm-box { width:430px; max-width:calc(100vw - 48px); background:var(--surface); border:1px solid var(--card-border); border-radius:14px; padding:22px 22px 18px; box-shadow:0 24px 60px rgba(15,20,32,.22); }
-  .confirm-title { font-size:17px; font-weight:650; margin-bottom:9px; }
-  .confirm-body { color:var(--muted); font-size:13.5px; line-height:1.7; }
-  .confirm-body code { font-family:var(--mono); font-size:12px; background:var(--surface-subtle); padding:1px 5px; border-radius:5px; }
-  .confirm-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; }
-  .confirm-actions button { min-width:84px; }
-  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
-  .chip{padding:4px 10px;border:1px solid var(--card-border);border-radius:999px;background:var(--surface);
-    color:var(--text-secondary);font-size:12.5px;cursor:pointer;user-select:none;line-height:1.7}
-  .chip:hover{border-color:var(--accent);color:var(--accent)}
-  .chip.on{border-color:var(--accent);color:var(--accent);background:rgba(77,107,254,.08)}
+/* 表单 */
+.field { padding: 10px 16px 4px; display: flex; flex-direction: column; gap: 5px; }
+.field > label { font-size: 12px; color: var(--muted); font-weight: 500; }
+.field .hint { font-size: 11.5px; color: var(--muted); opacity: .88; line-height: 1.55; }
+.field input { width: 100%; }
+.formgrid { display: grid; grid-template-columns: 1fr 1fr; }
+.formgrid .field { padding-bottom: 6px; }
+input[type=time] { font-family: inherit; font-size: 13px; color: var(--text); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; width: 104px; }
+input[type=time]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+/* 开关行 */
+.opt { display: flex; align-items: center; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.opt:last-child { border-bottom: 0; }
+.opt > div { flex: 1; min-width: 0; }
+.opt-name { font-size: 13.5px; font-weight: 600; }
+.opt-sub { font-size: 12px; color: var(--muted); line-height: 1.6; margin-top: 2px; }
+/* 单选行 */
+.choice { display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px;
+  border-bottom: 1px solid var(--border); cursor: pointer; }
+.choice:hover { background: var(--surface-sunken); }
+.choice input { width: auto; flex: 0 0 auto; margin: 2px 0 0; accent-color: var(--accent); }
+.choice-txt { display: block; }
+.choice-txt b { font-size: 13.5px; font-weight: 600; display: block; }
+/* 周几 */
+.wdays { display: flex; gap: 6px; padding: 12px 16px 4px; }
+.wd { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--border); display: grid;
+  place-items: center; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+.wd.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+/* 时段行 */
+.tm-row { display: flex; gap: 8px; align-items: center; padding: 5px 16px; }
+.tm-sep { font-size: 12px; color: var(--muted); }
+/* 角色包列表 */
+.rl-item { display: flex; align-items: center; gap: 10px; padding: 11px 16px;
+  border-bottom: 1px solid var(--border); cursor: pointer; }
+.rl-item:hover { background: var(--surface-sunken); }
+.rl-item.active { background: var(--accent-soft); }
+.rl-item .ric { width: 16px; height: 16px; stroke: var(--muted); fill: none;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 16px; }
+.rl-name { flex: 1; font-size: 13.5px; font-weight: 560; }
+.rl-num { font-size: 11.5px; color: var(--muted); }
+/* 嵌入控制台的占位框 */
+.embed { padding: 42px 24px 48px; text-align: center; background: var(--surface-sunken); }
+.embed-title { font-size: 15px; font-weight: 620; }
+.embed-sub { font-size: 12.5px; color: var(--muted); line-height: 1.8; margin-top: 8px; }
+.embed-tags { display: flex; gap: 7px; justify-content: center; flex-wrap: wrap; margin-top: 16px; }
+.etag { font-size: 11.5px; color: var(--muted); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; }
+
+/* 按钮 */
+.btn { font-family: inherit; font-size: 13px; font-weight: 550; border-radius: 8px; padding: 6px 13px;
+  cursor: pointer; border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.btn:hover { background: var(--surface-sunken); }
+.btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
+.btn.primary:hover { filter: brightness(1.05); }
+.btn.mini { padding: 4px 10px; font-size: 12.5px; }
+.btn.danger { color: var(--err); }
+.btn.danger:hover { background: var(--err-soft); }
+.btn.mini.on { background: var(--accent-soft); border-color: transparent; color: var(--accent); font-weight: 600; }
+.btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+
+/* 日志 */
+.logbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 11px 16px; border-bottom: 1px solid var(--border); }
+.logbar .search { margin-left: auto; width: 200px; }
+.lvchips { display: flex; gap: 5px; margin-left: 6px; }
+.lvchips .chip-filter { padding: 2px 9px; font-size: 12px; }
+.log { font: 12.5px/1.7 "Cascadia Mono", Consolas, monospace; padding: 12px 16px; max-height: 320px;
+  overflow-y: auto; background: var(--surface-sunken); }
+.log div { white-space: pre-wrap; word-break: break-all; }
+.log .t { color: var(--muted); }
+.log .info { color: var(--text); }
+.log .ok { color: var(--ok); }
+.log .warn { color: var(--warn); }
+.log .err { color: var(--err); }
+
+/* 提示条 */
+.note { display: flex; gap: 9px; align-items: flex-start; padding: 10px 16px; background: var(--surface-sunken);
+  border-top: 1px solid var(--border); color: var(--muted); font-size: 12.5px; }
+.note b { color: var(--text); font-weight: 600; }
+.note svg { width: 15px; height: 15px; flex: 0 0 15px; margin-top: 1px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+
+/* ── 对话范围 ── */
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 12px 16px; background: transparent; }
+.stat { background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; }
+.stat-label { font-size: 11.5px; color: var(--muted); }
+.stat-value { font-size: 19px; font-weight: 650; margin-top: 2px; letter-spacing: -.3px; }
+.stat-value small { font-size: 12px; font-weight: 500; color: var(--muted); margin-left: 5px; }
+.add-row { display: flex; gap: 8px; padding: 12px 16px; background: var(--surface-sunken);
+  border-bottom: 1px solid var(--border); align-items: center; }
+.add-row input { flex: 1 1 auto; min-width: 0; }
+.add-row input.remark { flex: 0 0 180px; }
+.filters { display: flex; gap: 6px; padding: 10px 16px; border-bottom: 1px solid var(--border); align-items: center; }
+.chip-filter { border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  border-radius: 999px; padding: 3px 11px; font-size: 12.5px; cursor: pointer; font-family: inherit; }
+.chip-filter.on { background: var(--accent-soft); border-color: transparent; color: var(--accent); font-weight: 600; }
+.filters .search { margin-left: auto; width: 190px; }
+.list { display: flex; flex-direction: column; }
+.row { display: grid; grid-template-columns: 24px 1fr 190px 104px auto; gap: 12px; align-items: center;
+  padding: 11px 16px; border-bottom: 1px solid var(--border); }
+.row:last-child { border-bottom: 0; }
+.row:hover { background: var(--surface-sunken); }
+.row.off .num, .row.off .remark-text { color: var(--muted); }
+.row-index { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.num { font-family: "Cascadia Mono", Consolas, "SF Mono", monospace; font-size: 13.5px; font-weight: 550;
+  letter-spacing: .2px; }
+.remark-text { color: var(--muted); font-size: 13px; }
+.remark-text.empty { opacity: .45; font-style: italic; }
+.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+  padding: 2px 9px; border-radius: 999px; width: fit-content; }
+.badge i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.badge.on { color: var(--ok); background: var(--ok-soft); }
+.badge.off { color: var(--muted); background: var(--surface-sunken); }
+.switch { width: 38px; height: 21px; border-radius: 999px; background: var(--border); position: relative;
+  cursor: pointer; transition: background .16s; flex: 0 0 auto; border: 0; padding: 0; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 17px; height: 17px;
+  border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.22); transition: transform .16s; }
+.switch.on { background: var(--ok); }
+.switch.on::after { transform: translateX(17px); }
+/* 开关里如果塞了真 checkbox（label>input 写法），把它藏起来只当点击区，
+   视觉仍由 .switch 本体和 ::after 圆点负责——否则原生方框会露出来叠在圆点上。 */
+.switch input[type="checkbox"] { position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; opacity: 0; cursor: pointer; }
+.switch:has(input:checked) { background: var(--ok); }
+.switch:has(input:checked)::after { transform: translateX(17px); }
+.row-actions { display: flex; gap: 5px; justify-content: flex-end; align-items: center; }
+input[type=text], input[type=search] { font-family: inherit; font-size: 13.5px; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 7px 11px;
+  outline: none; transition: border-color .14s, box-shadow .14s; }
+input[type=text]:focus, input[type=search]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+input::placeholder { color: var(--muted); opacity: .7; }
+.empty { padding: 32px 16px; text-align: center; color: var(--muted); font-size: 13px; }
+.empty-title { font-weight: 600; color: var(--text); margin-bottom: 3px; font-size: 13.5px; }
+.empty-icon { font-size: 20px; opacity: .45; margin-bottom: 8px; }
+
+/* 保存条 */
+.savebar { position: fixed; left: 236px; right: 0; bottom: 0; background: var(--surface);
+  border-top: 1px solid var(--border); padding: 11px 26px; display: flex; align-items: center;
+  gap: 12px; box-shadow: 0 -4px 18px rgba(20,28,45,.05); z-index: 50; }
+.savebar .dirty { font-size: 12.5px; color: var(--warn); font-weight: 600; }
+.savebar .spacer { flex: 1; }
+
+/* 弹窗 */
+.mask { position: fixed; inset: 0; background: rgba(15,20,32,.38); display: none; place-items: center; z-index: 9999; }
+.mask.show { display: grid; }
+.dialog { width: 400px; background: var(--surface); border-radius: 14px; padding: 20px;
+  border: 1px solid var(--border); box-shadow: 0 24px 60px rgba(10,16,28,.3); }
+.dialog h3 { margin: 0 0 8px; font-size: 15.5px; }
+.dialog p { margin: 0 0 6px; color: var(--muted); font-size: 13px; }
+.dialog code { font: 13px "Cascadia Mono", Consolas, monospace; background: var(--surface-sunken);
+  padding: 1px 6px; border-radius: 5px; color: var(--text); }
+.dialog-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.btn.danger-solid { background: var(--err); border-color: transparent; color: #fff; }
+.btn.danger-solid:disabled { opacity: .45; cursor: not-allowed; }
+.import-list { margin-top: 12px; max-height: 280px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; }
+.import-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.import-row:last-child { border-bottom: 0; }
+.import-row input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); flex: 0 0 auto; margin: 0; }
+.import-row .spacer { flex: 1; }
+.import-row.done { opacity: .5; }
+.import-tag { font-size: 11.5px; color: var(--muted); border: 1px solid var(--border); padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
+
+.toast-host { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); display: flex;
+  flex-direction: column; gap: 8px; z-index: 10000; align-items: center; }
+.toast { background: var(--text); color: var(--surface); padding: 8px 15px; border-radius: 9px;
+  font-size: 13px; font-weight: 500; box-shadow: 0 8px 24px rgba(10,16,28,.25); animation: pop .18s ease-out; }
+.toast.err { background: var(--err); color: #fff; }
+@keyframes pop { from { opacity: 0; transform: translateY(-6px); } }
+.hidden { display: none !important; }
+
+/* ══ 项目适配层（设计稿没有、但项目页面需要的部分）══ */
+:root {
+  --surface-subtle: var(--surface-sunken);
+  --surface-hover: var(--surface-sunken);
+  --card-border: var(--border);
+  --text-strong: var(--text);
+  --text-secondary: var(--muted);
+  --muted-soft: var(--muted);
+  --placeholder: var(--muted);
+  --bad: var(--err);
+  --accent-hover: var(--accent);
+  --accent-soft-bg: var(--accent-soft);
+  --accent-soft-fg: var(--accent);
+  --accent-border-soft: var(--accent-soft);
+  --mono: "Cascadia Mono", Consolas, "Noto Sans Mono", monospace;
+}
+html, body { height: 100%; margin: 0; }
+/* body 布局见上方 flex 定义 */
+aside { width: 236px; background: var(--surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; height: 100vh; overflow-y: auto; }
+aside::-webkit-scrollbar { width: 0; }
+#nav { padding: 4px 10px 10px; overflow-y: auto; flex: 1; }
+.nav-item .ico { width: 16px; text-align: center; color: var(--muted); font-size: 12px; flex: 0 0 16px; }
+.nav-item.active .ico { color: var(--accent); }
+.aside-foot .dot.ok { background: var(--ok); }
+.aside-foot .dot.warn { background: var(--warn); }
+.aside-foot .dot.bad { background: var(--err); }
+.theme-row button { width: 100%; display: flex; align-items: center; gap: 6px; justify-content: center;
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+  color: var(--muted); font: 12px/1 inherit; cursor: pointer; }
+.theme-row button:hover { background: var(--surface-sunken); color: var(--text); }
+main { overflow-y: auto; min-width: 0; }
+.view[hidden] { display: none; }
+.view.pad { padding: 22px 26px 40px; }
+
+/* 嵌入页：撑满内容区，不留底部空白 */
+.view.embed { padding: 0; height: 100vh; overflow: hidden; }
+.view.embed > .card { height: 100vh; margin: 0; border: 0; border-radius: 0; box-shadow: none; overflow: hidden; }
+.view.embed > .card > iframe { width: 100%; height: 100vh; border: 0; display: block; }
+.view > iframe { width: 100%; height: 100%; border: 0; display: block; background: var(--bg); }
+.view.pad > .card > iframe { border-radius: 0 0 12px 12px; }
+
+/* ── 基础控件：项目里大量按钮/输入框没有 class，靠元素选择器 ── */
+button { cursor: pointer; font: inherit; font-size: 13px; font-weight: 550; border-radius: 8px;
+  padding: 6px 13px; border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  white-space: nowrap; transition: background .14s, border-color .14s, color .14s; }
+button:hover:not(:disabled) { background: var(--surface-sunken); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button.primary:hover:not(:disabled) { filter: brightness(1.05); background: var(--accent); }
+button.danger { color: var(--err); }
+button.danger:hover:not(:disabled) { background: var(--err-soft); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.mini { padding: 4px 10px; font-size: 12.5px; }
+label { display: block; font-size: 12px; color: var(--muted); margin: 13px 0 6px; }
+label:first-of-type { margin-top: 0; }
+input, textarea, select { width: 100%; padding: 7px 11px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font: inherit; font-size: 13.5px; outline: none;
+  transition: border-color .14s, box-shadow .14s; }
+input:focus, textarea:focus, select:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+textarea { min-height: 66px; resize: vertical; font-family: var(--mono); font-size: 12px; line-height: 1.6; }
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: .7; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.hint { font-size: 11.5px; color: var(--muted); opacity: .88; margin-top: 5px; line-height: 1.55; }
+.hint code { font-family: var(--mono); font-size: 11px; }
+.steps { margin: 12px 0 0; padding-left: 17px; color: var(--muted); font-size: 12px; }
+.steps li { margin: 2px 0; }
+pre { margin: 0; padding: 12px 16px; background: var(--surface-sunken); border: 1px solid var(--border);
+  border-radius: 10px; font-family: var(--mono); font-size: 11.5px; line-height: 1.6; max-height: 250px;
+  overflow: auto; white-space: pre-wrap; word-break: break-all; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.chip { padding: 3px 11px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+  color: var(--muted); font-size: 12.5px; cursor: pointer; user-select: none; line-height: 1.7; }
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+.chip.on { border-color: transparent; color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.field-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px 14px; }
+.field-actions .hint { margin: 0; }
+
+/* ── 状态长条（项目用 .live-card/.live-top//* 一排指示灯：设计稿 .conn / .conn-item，项目沿用 .conn-row / .conn */
+.conn-name { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conn-port { font: 11.5px var(--mono); color: var(--muted); }
+.conn-state { font-size: 11.5px; font-weight: 650; }
+.conn-state.ok { color: var(--ok); }
+.conn-state.warn { color: var(--warn); }
+.conn-state.ond { color: var(--muted); }
+.proc-kv { display: flex; flex-direction: column; gap: 2px; }
+.proc-row:last-of-type { border-bottom: 0; }
+.card-head h2, .card-head .card-title { margin: 0; }
+.card h2 { margin: 0; font-size: 14.5px; font-weight: 640; letter-spacing: 0; text-transform: none; color: var(--text); }
+/* ── 日志 ── */
+
+/* ── 概览统计（设计稿 .stats/.stat）── */
+.metric { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--border); }
+.metric > div { padding: 13px 16px; background: var(--surface); border: 0; border-radius: 0; }
+.metric span { display: block; font-size: 11.5px; color: var(--muted); }
+.metric strong { font-size: 19px; font-weight: 650; letter-spacing: -.3px; }
+.metric small { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+/* ── 确认弹窗（项目 #confirm-mask 结构，视觉对齐 .mask/.dialog）── */
+#confirm-mask { position: fixed; inset: 0; background: rgba(15,20,32,.38); display: grid; place-items: center; z-index: 9999; }
+#confirm-mask[hidden] { display: none; }
+.confirm-box { width: 400px; max-width: calc(100vw - 48px); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 14px; padding: 20px; box-shadow: 0 24px 60px rgba(10,16,28,.3); }
+.confirm-title { font-size: 15.5px; font-weight: 640; margin-bottom: 8px; }
+.confirm-body { color: var(--muted); font-size: 13px; line-height: 1.7; }
+.confirm-body code { font-family: var(--mono); font-size: 12px; background: var(--surface-sunken); padding: 1px 6px; border-radius: 5px; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.confirm-actions button { min-width: 84px; }
+.rl-list { display: flex; flex-direction: column; }
+.rl-item:last-child { border-bottom: 0; }
+.field input, .field select, .field textarea { width: 100%; }
+.choice:last-child { border-bottom: 0; }
+
+/* nav-item 是 <button>，抹掉按钮默认外观，回到设计稿的导航项长相 */
+button.nav-item { width: 100%; border: 0; background: transparent; padding: 8px 10px; text-align: left;
+  font: inherit; font-size: 13.5px; font-weight: inherit; color: inherit; border-radius: 8px; }
+button.nav-item:hover:not(:disabled) { background: var(--surface-sunken); }
+button.nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+button.nav-item.active:hover:not(:disabled) { background: var(--accent-soft); }
+button.ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+button.ghost:hover:not(:disabled) { background: var(--surface-sunken); color: var(--text); }
+.view.empty-state { padding: 64px 26px; text-align: center; color: var(--muted); font-size: 13px; }
+
+/* 对话范围：备注无边框输入 */
+.row input.remark-text { border: 0; background: transparent; padding: 2px 4px; width: 100%;
+  font-size: 13px; color: var(--text); border-radius: 6px; }
+.row input.remark-text::placeholder { color: var(--muted); opacity: .55; font-style: italic; }
+.row input.remark-text:hover { background: var(--surface); }
+.row input.remark-text:focus { outline: none; background: var(--surface); box-shadow: 0 0 0 2px var(--accent-soft-bg); }
+.row .btn.mini.danger svg { width: 13px; height: 13px; }
+.row .switch { cursor: pointer; border: 0; padding: 0; }
+.remark-text.empty { opacity: .45; font-style: italic; }
 </style>
 </head>
 <body>
 
 <aside>
-  <div class="brand">
-    <div class="brand-mark">Q</div>
-    <div class="brand-text"><b>QQ 聊天机器人</b><small>控制台</small></div>
-  </div>
-  <div id="nav"></div>
-  <div class="theme-row">
-    <button id="theme-btn" type="button" title="切换外观">◐ <span id="theme-label">跟随系统</span></button>
-  </div>
-  <div class="aside-foot">
-    <span><i class="dot" id="foot-dot"></i><span id="foot-text">检查中…</span></span>
-    <small id="foot-sub">本地运行 · 不经过第三方</small>
+  <div class="brand"><span class="brand-mark">Q</span> QQ 聊天机器人</div>
+  <div id="nav" class="nav"></div>
+  <div class="side-foot">
+    
+    <div class="foot-row"><i class="dot" id="foot-dot"></i><span id="foot-text">检查中…</span></div>
+    <div class="foot-sub" id="foot-sub">本地运行 · 不经过第三方</div>
   </div>
 </aside>
 
@@ -214,7 +451,7 @@
     <div class="confirm-title" id="confirm-title">确认操作</div>
     <div class="confirm-body" id="confirm-body"></div>
     <div class="confirm-actions">
-      <button id="confirm-cancel">取消</button>
+      <button id="confirm-cancel" class="btn">取消</button>
       <button class="danger" id="confirm-ok">确认删除</button>
     </div>
   </div>
@@ -225,28 +462,28 @@ const $ = (id) => document.getElementById(id);
 
 const NAV = [
   { group: '运行', items: [
-    { id: 'status',  label: '启动与状态', ico: '◉', self: true },
-    { id: 'overview', label: '运行总览', ico: '◫' },
-    { id: 'sessions', label: '会话与审批', ico: '☷' }
+    { id: 'status',  label: '启动与状态', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M4 13h4l2 5h4l2-5h4"/><path d="M12 3v10"/></svg>' },
+    { id: 'sessions', label: '会话与审批', svg: '<svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg>' }
   ]},
   { group: '角色与行为', items: [
-    { id: 'persona',  label: '人格与角色', ico: '◈' },
-    { id: 'rolepack', label: '角色包', ico: '⧉', self: true },
-    { id: 'quiet',    label: '静默时间', ico: '◔', self: true },
-    { id: 'personalize', label: '个性', ico: '✦', self: true },
-    { id: 'social-v2', label: '二代仿真', ico: '◆' },
-    { id: 'social-v1', label: '一代仿真', ico: '◇' },
-    { id: 'slang',    label: '黑话词库', ico: '▤' }
+    { id: 'persona',  label: '人格与角色', svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.5 3.1-5.6 7-5.6s7 2.1 7 5.6"/></svg>' },
+    { id: 'rolepack', label: '角色包', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M12 3l8 4v10l-8 4-8-4V7z"/><path d="M4 7l8 4 8-4M12 11v10"/></svg>' },
+    { id: 'quiet',    label: '静默时间', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 019.5 4a8.5 8.5 0 108.9 11.4 8.5 8.5 0 011.6-.9z"/></svg>' },
+    { id: 'personalize', label: '个性', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M12 3l2.2 5.6L20 11l-5.8 2.4L12 19l-2.2-5.6L4 11l5.8-2.4z"/></svg>' },
+    { id: 'chat', label: '聊天行为', svg: '<svg viewBox="0 0 24 24"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.9 8.9 0 0 1-4-.9L3 21l1.9-4.7A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4z"/><path d="M8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01"/></svg>', self: true },
+    { id: 'social-v2', label: '二代仿真', svg: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3.5 19c0-3 2.5-4.8 5.5-4.8s5.5 1.8 5.5 4.8"/><path d="M16 14.4c2.4 0 4.5 1.3 4.5 3.6"/></svg>' },
+    { id: 'social-v1', label: '一代仿真', svg: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="14" rx="2"/><path d="M8 20h8M9 9h6M9 13h4"/></svg>' },
+    { id: 'slang',    label: '黑话词库', svg: '<svg viewBox="0 0 24 24"><path d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"/></svg>' }
   ]},
   { group: '管理', items: [
-    { id: 'model',    label: '模型与密钥', ico: '⚙', self: true },
-    { id: 'allow',    label: '对话范围', ico: '👥', self: true },
-    { id: 'qq',       label: 'QQ 启动', ico: '▶', self: true },
-    { id: 'close',    label: '关窗行为', ico: '⏻', self: true },
-    { id: 'usage',    label: '令牌与花费', ico: '◧' },
-    { id: 'access',   label: '访问与安全', ico: '⊙' },
-    { id: 'operations', label: '调试与运维', ico: '⌘' },
-    { id: 'reference',  label: '工具参考', ico: 'ⓘ' }
+    { id: 'model',    label: '模型与密钥', self: true, svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.4M12 18.6V21M3 12h2.4M18.6 12H21M5.6 5.6l1.7 1.7M16.7 16.7l1.7 1.7M18.4 5.6l-1.7 1.7M7.3 16.7l-1.7 1.7"/></svg>' },
+    { id: 'allow',    label: '对话范围', self: true, svg: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3.5 19c0-3 2.5-4.8 5.5-4.8s5.5 1.8 5.5 4.8"/><path d="M16 14.4c2.4 0 4.5 1.3 4.5 3.6"/></svg>' },
+    { id: 'qq',       label: 'QQ 启动', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M8 5.5v13l10-6.5z"/></svg>' },
+    { id: 'close',    label: '关窗行为', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M12 4v8"/><path d="M7.5 7a7 7 0 109 0"/></svg>' },
+    { id: 'usage',    label: '令牌用量', svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9M9.5 10h4a1.8 1.8 0 010 3.6h-3"/></svg>' , self: true },
+    { id: 'access',   label: '访问与安全', svg: '<svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>' },
+    { id: 'operations', label: '调试与运维', svg: '<svg viewBox="0 0 24 24"><path d="M15 4a4.5 4.5 0 00-4 6.7L4 17.6 6.4 20l6.9-7a4.5 4.5 0 005.7-6.2l-2.6 2.6-2.4-2.4z"/></svg>' },
+    { id: 'reference',  label: '工具参考', svg: '<svg viewBox="0 0 24 24"><path d="M5 4h9a3 3 0 013 3v13H8a3 3 0 01-3-3z"/><path d="M17 7h2v13h-2M8 8h6M8 12h6"/></svg>' }
   ]}
 ];
 
@@ -265,81 +502,102 @@ for (const g of NAV) {
     const b = document.createElement('button');
     b.className = 'nav-item';
     b.dataset.nav = it.id;
-    b.innerHTML = `<span class="ico">${it.ico}</span><span>${it.label}</span>`;
+    b.innerHTML = `${it.svg || ''}<span>${it.label}</span>`;
     b.onclick = () => go(it.id);
     $('nav').appendChild(b);
   }
 }
 
 function head(eyebrow, title, desc) {
-  return `<div class="head"><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p>${desc}</p></div>`;
+  return `<div class="head"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p class="sub">${desc}</p></div></div>`;
 }
 
 // ── 自建页：启动与状态 ───────────────────────────────────
 const statusView = document.createElement('section');
 statusView.className = 'view pad';
 statusView.dataset.view = 'status';
-statusView.innerHTML = head('LAUNCHER', '启动与状态', '把网关和机器人拉起来，剩下的都在左边。') + `
+statusView.innerHTML = head('LAUNCHER', '启动与状态', '把网关和机器人拉起来，状态、用量和日志都在这一页。') + `
+<div class="card">
+  <div class="card-head"><div class="card-title">机器人状态</div></div>
+  <div class="live" style="border-top:0;padding:15px 16px 13px">
+    <i class="led" id="live-led"></i>
+    <div style="min-width:150px"><div class="live-state" id="live-state" style="font-size:19px">—</div><div class="live-sub" id="live-sub">读取机器人状态中…</div></div>
+  </div>
+  <div class="stats" id="live-facts" style="grid-template-columns:repeat(4,1fr)"></div>
+</div>
+
 <div class="grid">
-  <div class="card span2" id="live-card" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-    <i class="led" id="live-led" style="width:13px;height:13px;flex:0 0 13px"></i>
-    <div style="min-width:190px">
-      <div id="live-state" style="font-size:21px;font-weight:650;letter-spacing:.01em;line-height:1.25">—</div>
-      <div class="hint" id="live-sub" style="margin-top:3px">读取机器人状态中…</div>
+  <div class="card">
+    <div class="card-head"><div class="card-title">链路</div><div class="spacer"></div>
+      <button class="btn mini" id="btn-gw-start-k">启动网关</button>
+      <button class="btn mini primary" id="btn-bot-start-k">启动机器人</button></div>
+    <div class="conn" style="grid-template-columns:1fr 1fr">
+      <div class="conn-item"><i class="led" id="lamp-5099"></i><div><div class="conn-name">QQ 网关页面</div><div class="conn-sub">127.0.0.1:5099</div></div><span class="conn-state" id="st-5099">—</span></div>
+      <div class="conn-item"><i class="led" id="lamp-38000"></i><div><div class="conn-name">网关接口</div><div class="conn-sub">127.0.0.1:38000</div></div><span class="conn-state" id="st-38000">—</span></div>
+      <div class="conn-item"><i class="led" id="lamp-38001"></i><div><div class="conn-name">QQ 长连接</div><div class="conn-sub">127.0.0.1:38001</div></div><span class="conn-state" id="st-38001">—</span></div>
+      <div class="conn-item"><i class="led" id="lamp-3101"></i><div><div class="conn-name">本地控制台</div><div class="conn-sub" id="lamp-console-port">127.0.0.1:3101</div></div><span class="conn-state" id="st-3101">—</span></div>
     </div>
-    <div id="live-facts" style="margin-left:auto;display:flex;gap:28px;text-align:right;flex-wrap:wrap"></div>
   </div>
+  <div class="card">
+    <div class="card-head"><div class="card-title">今天</div></div>
+    <div class="stats" style="grid-template-columns:1fr 1fr">
+      <div class="stat"><div class="stat-label">说话次数</div><div class="stat-value" id="ov-turns">—</div></div>
+      <div class="stat"><div class="stat-label">主动搭话</div><div class="stat-value" id="ov-proactive">—</div></div>
+      <div class="stat"><div class="stat-label">会话数</div><div class="stat-value" id="ov-convs">—</div></div>
+      <div class="stat"><div class="stat-label">token 用量</div><div class="stat-value" id="ov-cost">—</div></div>
+    </div>
+  </div>
+</div>
 
-  <div class="card span2" id="gw-missing" hidden style="border-color:#f0c9a8;background:#fff8f1">
-    <h2 style="color:#a35b1f">还差一步：装 QQ 网关</h2>
-    <p class="hint" style="margin:6px 0 10px">这个目录里没有 <code>snowluma\</code>。本程序不带网关（它是另一个项目、另一份许可），QQ 登录要靠它。</p>
-    <ol class="steps">
-      <li>打开 <a href="https://github.com/SnowLuma/SnowLuma" target="_blank" rel="noreferrer">SnowLuma 的 GitHub 项目</a>，进 Releases 下载最新的 Windows 版压缩包。</li>
-      <li>解压，把解出来的文件夹<b>改名为 snowluma</b>。</li>
-      <li>把它放到本程序目录下，和 <code>node.exe</code>、<code>QQ聊天机器人.exe</code> 同一层。</li>
-      <li>回来点「启动」，再点「登录页」扫码登录 QQ。</li>
+<div class="card" id="gw-missing" hidden style="border-color:#f0c9a8">
+  <div class="card-head" style="background:#fff8f1;border-bottom-color:#f0c9a8"><div class="card-title" style="color:#a35b1f">还差一步：装 QQ 网关</div></div>
+  <div style="padding:14px 16px 16px">
+    <p class="hint" style="margin:0 0 8px">面板起得来，但没有找到 <code>snowluma\index.mjs</code>。装好之后点上面的「启动网关」。</p>
+    <ol class="steps" style="margin:0">
+      <li>打开 SnowLuma 的 GitHub Releases 页面。</li>
+      <li>下载 Windows 版压缩包。</li>
+      <li>解压后把文件夹改名成 <code>snowluma</code>，放到本程序目录下（和 <code>node.exe</code> 同一层）。</li>
+      <li>回到这一页点「启动网关」，等灯变绿。</li>
     </ol>
   </div>
+</div>
 
-  <div class="card">
-    <h2>进程</h2>
-    <div class="rowline">
-      <div class="who"><i class="led" id="led-gw"></i><div><div class="name">QQ 网关</div><div class="meta" id="meta-gw">检查中…</div></div></div>
-      <div class="btns"><button id="btn-gw-start">启动</button><button id="btn-gw-login">登录页</button></div>
-    </div>
-    <div class="rowline">
-      <div class="who"><i class="led" id="led-bot"></i><div><div class="name">机器人</div><div class="meta" id="meta-bot">检查中…</div></div></div>
-      <div class="btns"><button class="primary" id="btn-bot-start">启动</button><button class="danger" id="btn-bot-stop">停止</button></div>
-    </div>
-    <ol class="steps">
-      <li>网关没起来时点「启动」；第一次需要点「登录页」扫码登录 QQ。</li>
-      <li>QQ 上线后点机器人「启动」，左边那些功能页就都能用了。</li>
-      <li>运行状态在左边「运行总览」和上面那张卡里看，不用一直开着这一页。</li>
-    </ol>
-    <div class="toast" id="toast1"></div>
+<div class="card">
+  <div class="card-head"><div class="card-title">进程</div><div class="spacer"></div></div>
+  <div class="proc-row">
+    <i class="led" id="led-gw"></i>
+    <div class="proc-main"><div class="proc-name">QQ 网关</div><div class="proc-meta" id="meta-gw">检查中…</div></div>
+    <div class="proc-side"><div class="proc-kv"><span>端口</span><strong>38000 / 38001</strong></div><div class="proc-kv"><span>PID</span><strong id="pid-gw">—</strong></div></div>
+    <div class="btns"><button id="btn-gw-start" class="btn mini">启动</button><button id="btn-gw-login" class="btn mini">登录页</button></div>
   </div>
+  <div class="proc-row">
+    <i class="led" id="led-bot"></i>
+    <div class="proc-main"><div class="proc-name">机器人</div><div class="proc-meta" id="meta-bot">检查中…</div></div>
+    <div class="proc-side"><div class="proc-kv"><span>控制台</span><strong id="pid-bot-port">3101</strong></div><div class="proc-kv"><span>PID</span><strong id="pid-bot">—</strong></div></div>
+    <div class="btns"><button id="btn-bot-start" class="btn mini primary">启动</button><button id="btn-bot-restart" class="btn mini">重启</button><button id="btn-bot-stop" class="btn mini danger">停止</button></div>
+  </div>
+  <div class="note"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg><span>先网关后机器人。第一次用要先点「登录页」扫码登录 QQ。</span></div>
+</div>
 
-  <div class="card">
-    <h2>连接</h2>
-    <div class="metric">
-      <div><span>网关 WebUI</span><strong id="m-webui">—</strong><small>:5099</small></div>
-      <div><span>OneBot HTTP</span><strong id="m-http">—</strong><small>:38000</small></div>
-      <div><span>OneBot WS</span><strong id="m-ws">—</strong><small>:38001</small></div>
-      <div><span>控制台</span><strong id="m-console">—</strong><small id="m-console-port">:3100</small></div>
+<div class="card">
+  <div class="card-head"><div class="card-title">日志</div><div class="spacer"></div><button id="btn-log-clear" class="btn mini">清屏</button></div>
+  <div class="logbar">
+    <div class="chips">
+      <button id="btn-log-bridge" class="btn mini on" data-src="bridge">桥接</button>
+      <button id="btn-log-gw" class="btn mini" data-src="snowluma">网关</button>
+      <button id="btn-log-ui" class="btn mini" data-src="ui">面板</button>
     </div>
-    <div class="hint" style="margin-top:14px">机器人没启动时，功能页会提示不可用；启动后自动就绪。</div>
-    <div class="toast" id="toast2"></div>
-  </div>
-
-  <div class="card span2">
-    <h2>日志</h2>
-    <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:10px">
-      <div class="btns"><button id="btn-log-bridge">桥接日志</button><button id="btn-log-gw">网关日志</button><button id="btn-log-ui">面板日志</button></div>
-      <button id="btn-log-refresh">刷新</button>
+    <div class="lvchips" id="log-lv">
+      <button class="chip-filter on" data-lv="all">全部</button>
+      <button class="chip-filter" data-lv="warn">警告</button>
+      <button class="chip-filter" data-lv="err">错误</button>
     </div>
-    <pre id="log">—</pre>
+    <input id="log-q" class="search" placeholder="过滤关键字，例如 group: 或 error">
+    <button id="btn-log-refresh" class="btn mini">刷新</button>
   </div>
-</div>`;
+  <div id="log" class="log">—</div>
+</div>
+`;
 $('main').appendChild(statusView);
 
 // ── 自建页：模型与密钥 ─────────────────────────────────
@@ -349,81 +607,106 @@ modelView.dataset.view = 'model';
 modelView.innerHTML = head('MODEL / KEYS', '模型与密钥', '机器人要调用好几个外部服务，各自的地址和密钥都在这一页填。保存后重启机器人生效。') + `
 <div class="grid">
   <div class="card">
-    <h2>语言模型</h2>
-    <div class="two">
-      <div><label>接口地址</label><input id="baseUrl" placeholder="https://api.deepseek.com/v1"></div>
-      <div><label>模型名</label><input id="model" placeholder="deepseek-chat" autocomplete="off" spellcheck="false"></div>
+    <div class="card-head"><h2 class="card-title">语言模型</h2></div>
+    <div class="formgrid">
+      <div class="field"><label>接口地址</label><input id="baseUrl" placeholder="https://api.deepseek.com/v1"></div>
+      <div class="field"><label>模型名</label><input id="model" placeholder="deepseek-chat" autocomplete="off" spellcheck="false"></div>
     </div>
-    <label>API Key <span class="hint" id="key-mask" style="display:inline"></span></label>
-    <input id="apiKey" type="password" placeholder="留空表示不修改" autocomplete="off">
-    <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
-      <button id="btn-fetch-models">获取可用模型</button>
-      <span class="hint" id="models-hint" style="margin:0">用上面填的地址和 key 去问接口</span>
+    <div class="field">
+      <label>API Key <span class="hint" id="key-mask" style="display:inline"></span></label>
+      <input id="apiKey" type="password" placeholder="留空表示不修改" autocomplete="off">
     </div>
-    <div id="model-chips" class="chips"></div>
-    <div style="display:none" data-old="models-tail">
+    <div class="field">
+      <div class="field-actions">
+        <button id="btn-fetch-models" class="btn mini">获取可用模型</button>
+        <span class="hint" id="models-hint">用上面填的地址和 key 去问接口</span>
+      </div>
+      <div id="model-chips" class="chips"></div>
+      <div class="hint">OpenAI 兼容接口都行：DeepSeek 官方、中转站、本地 vLLM。</div>
     </div>
-    <div class="hint">OpenAI 兼容接口都行：DeepSeek 官方、中转站、本地 vLLM。</div>
   </div>
+
   <div class="card">
-    <h2>后端</h2>
-    <label style="display:flex;align-items:center;gap:8px;font-weight:500">
-      <input type="radio" name="backend" id="backendStandalone" value="standalone" style="width:auto"> 直连模型 API（默认）
+    <div class="card-head"><h2 class="card-title">后端</h2></div>
+    <label class="choice">
+      <input type="radio" name="backend" id="backendStandalone" value="standalone">
+      <span class="choice-txt"><b>直连模型 API</b>机器人自己调模型，不需要额外程序（默认）</span>
     </label>
-    <label style="display:flex;align-items:center;gap:8px;margin-top:6px;font-weight:500">
-      <input type="radio" name="backend" id="backendDsh" value="dsh" style="width:auto"> 连 DeepSeek Harness
+    <label class="choice">
+      <input type="radio" name="backend" id="backendDsh" value="dsh">
+      <span class="choice-txt"><b>连 DeepSeek Harness</b>用 DSH 里配好的模型和会话</span>
     </label>
-    <div style="margin-top:10px">
+    <div class="field">
       <label>DSH 地址</label>
       <input id="dshBaseUrl" placeholder="http://127.0.0.1:3080">
-      <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
-        <button id="btn-fetch-dsh">检测 DSH 端口</button>
-        <span class="hint" id="dsh-hint" style="margin:0">DSH 每次启动会换端口，点一下自动找</span>
+    </div>
+    <div class="field">
+      <div class="field-actions">
+        <button id="btn-fetch-dsh" class="btn mini">检测 DSH 端口</button>
+        <span class="hint" id="dsh-hint">DSH 每次启动会换端口，点一下自动找</span>
       </div>
     </div>
-    <div class="hint">不用 DSH 就选第一项：机器人自己直连模型，不需要额外程序。</div>
   </div>
+
   <div class="card">
-    <h2>语音合成</h2>
-    <div class="two">
-      <div><label>接口地址</label><input id="ttsBaseUrl" placeholder="https://api.fish.audio"></div>
-      <div><label>模型名</label><input id="ttsModel" placeholder="s2.1-pro-free" autocomplete="off" spellcheck="false">
-        <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
-          <button id="btn-fetch-tts-models" type="button">获取可用模型</button>
-          <button id="btn-test-tts" type="button">检测连通性</button>
-          <span class="hint" id="tts-models-hint" style="margin:0">Fish Audio 的引擎版本</span>
-        </div>
-        <div class="hint" id="tts-test-hint" style="margin-top:6px"></div>
-        <div id="tts-model-chips" class="chips"></div></div>
+    <div class="card-head"><h2 class="card-title">语音合成</h2></div>
+    <div class="formgrid">
+      <div class="field"><label>接口地址</label><input id="ttsBaseUrl" placeholder="https://api.fish.audio"></div>
+      <div class="field"><label>模型名</label><input id="ttsModel" placeholder="s2.1-pro-free" autocomplete="off" spellcheck="false"></div>
     </div>
-    <label>API Key <span class="hint" id="tts-mask" style="display:inline"></span></label>
-    <input id="ttsApiKey" type="password" placeholder="留空表示不修改" autocomplete="off">
-    <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-weight:500">
-      <input type="checkbox" id="ttsEnabled" style="width:auto"> 启用语音合成
+    <div class="field">
+      <div class="field-actions">
+        <button id="btn-fetch-tts-models" type="button" class="btn mini">获取可用模型</button>
+        <button id="btn-test-tts" type="button" class="btn mini">检测连通性</button>
+        <span class="hint" id="tts-models-hint">Fish Audio 的引擎版本</span>
+      </div>
+      <div class="hint" id="tts-test-hint"></div>
+      <div id="tts-model-chips" class="chips"></div>
+    </div>
+    <div class="field">
+      <label>API Key <span class="hint" id="tts-mask" style="display:inline"></span></label>
+      <input id="ttsApiKey" type="password" placeholder="留空表示不修改" autocomplete="off">
+    </div>
+    <label class="choice">
+      <input type="checkbox" id="ttsEnabled">
+      <span class="choice-txt"><b>启用语音合成</b>没有音色的角色只打字、不出声</span>
     </label>
-    <div class="hint">音色不在这一页：每个角色的声音写在它的「角色包」里。没写音色的角色不会发声，只打字。</div>
-  </div>
-  <div class="card">
-    <h2>联网搜索</h2>
-    <label>API Key <span class="hint" id="web-mask" style="display:inline"></span></label>
-    <input id="webSearchApiKey" type="password" placeholder="留空表示不修改" autocomplete="off">
-    <label style="margin-top:10px">接口地址</label>
-    <input id="webSearchBaseURL" placeholder="留空用默认">
-    <div class="hint" id="web-env-hint">留空 Key 时回退到环境变量。</div>
-  </div>
-  <div class="card">
-    <h2>网关接入</h2>
-    <div class="two">
-      <div><label>WebSocket 地址</label><input id="wsUrl" placeholder="ws://127.0.0.1:38001"></div>
-      <div><label>HTTP 地址</label><input id="httpUrl" placeholder="http://127.0.0.1:38000"></div>
+    <div class="field">
+      <div class="hint">音色不在这一页：每个角色的声音写在它的「角色包」里。</div>
     </div>
-    <label>接入令牌 <span class="hint" id="gw-mask" style="display:inline"></span></label>
-    <input id="accessToken" type="password" placeholder="留空表示不修改" autocomplete="off">
-    <div class="hint">默认连本机自带网关，一般不用改。</div>
   </div>
+
+  <div class="card">
+    <div class="card-head"><h2 class="card-title">联网搜索</h2></div>
+    <div class="field">
+      <label>API Key <span class="hint" id="web-mask" style="display:inline"></span></label>
+      <input id="webSearchApiKey" type="password" placeholder="留空表示不修改" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>接口地址</label>
+      <input id="webSearchBaseURL" placeholder="留空用默认">
+      <div class="hint" id="web-env-hint">留空 Key 时回退到环境变量。</div>
+    </div>
+  </div>
+
   <div class="card span2">
-    <button class="primary" id="btn-save">保存配置</button>
-    <div class="toast" id="toast3"></div>
+    <div class="card-head"><h2 class="card-title">网关接入</h2></div>
+    <div class="formgrid">
+      <div class="field"><label>WebSocket 地址</label><input id="wsUrl" placeholder="ws://127.0.0.1:38001"></div>
+      <div class="field"><label>HTTP 地址</label><input id="httpUrl" placeholder="http://127.0.0.1:38000"></div>
+    </div>
+    <div class="field">
+      <label>接入令牌 <span class="hint" id="gw-mask" style="display:inline"></span></label>
+      <input id="accessToken" type="password" placeholder="留空表示不修改" autocomplete="off">
+      <div class="hint">默认连本机自带网关，一般不用改。</div>
+    </div>
+  </div>
+
+  <div class="card span2">
+    <div class="field-actions">
+      <button class="primary" id="btn-save">保存配置</button>
+      <span class="hint">保存后重启机器人生效。</span>
+    </div>
   </div>
 </div>`;
 $('main').appendChild(modelView);
@@ -432,32 +715,84 @@ $('main').appendChild(modelView);
 const allowView = document.createElement('section');
 allowView.className = 'view pad';
 allowView.dataset.view = 'allow';
-allowView.innerHTML = head('ALLOW', '对话范围', '机器人只听这些群和好友，别处的消息一律忽略。') + `
-<div class="grid">
-  <div class="card">
-    <h2>群与好友</h2>
-    <label>群号（逗号或换行分隔）</label>
-    <textarea id="groups" placeholder="123456789"></textarea>
-    <label>好友 QQ</label>
-    <textarea id="private" placeholder="1000000001"></textarea>
-    <div class="hint">留空且不打开「空名单放行」时，机器人什么都不回。</div>
+allowView.innerHTML = head('ALLOW', '对话范围', '机器人只听这些群和好友，别处的消息一律忽略。关掉的号留在名单里，随时能再打开；真要彻底拉黑就填下面的「拒绝名单」。') + `<div class="card">
+  <div class="stats">
+    <div class="stat"><div class="stat-label">群聊</div><div class="stat-value" id="sc-g-count">0</div></div>
+    <div class="stat"><div class="stat-label">私聊好友</div><div class="stat-value" id="sc-p-count">0</div></div>
+    <div class="stat"><div class="stat-label">停用</div><div class="stat-value" id="sc-d-count">0</div></div>
   </div>
-  <div class="card">
-    <h2>管理员与端口</h2>
-    <div class="two">
-      <div><label>管理员 QQ</label><input id="ownerQQ" placeholder="1000000001"></div>
-      <div><label>控制台端口</label><input id="consolePort" placeholder="3100"></div>
-    </div>
+</div>
+
+<section class="card">
+  <div class="card-head">
+    <div class="card-title">群聊白名单 <span class="count" id="sc-g-cnt">0</span></div>
+    <div class="spacer"></div>
+    <button class="btn mini" id="sc-import">从已有会话导入</button>
+    <button class="btn mini primary" id="sc-g-save">保存</button>
+  </div>
+  <div class="add-row">
+    <input type="text" id="sc-g-input" placeholder="输入群号，例如 123456789" inputmode="numeric">
+    <input type="text" class="remark" id="sc-g-note" placeholder="备注（可选）">
+    <button class="btn primary" id="sc-g-add">添加</button>
+  </div>
+  <div class="filters" id="sc-g-filter">
+    <button class="chip-filter on" data-f="all">全部</button>
+    <button class="chip-filter" data-f="on">启用</button>
+    <button class="chip-filter" data-f="off">停用</button>
+    <input type="search" class="search" id="sc-g-search" placeholder="搜索群号或备注">
+  </div>
+  <div class="list" id="sc-g-list"></div>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <div class="card-title">私聊好友 <span class="count" id="sc-p-cnt">0</span></div>
+    <div class="spacer"></div>
+    <button class="btn mini primary" id="sc-p-save">保存</button>
+  </div>
+  <div class="add-row">
+    <input type="text" id="sc-p-input" placeholder="输入 QQ 号，例如 1000000001" inputmode="numeric">
+    <input type="text" class="remark" id="sc-p-note" placeholder="备注（可选）">
+    <button class="btn primary" id="sc-p-add">添加</button>
+  </div>
+  <div class="filters" id="sc-p-filter">
+    <button class="chip-filter on" data-f="all">全部</button>
+    <button class="chip-filter" data-f="on">启用</button>
+    <button class="chip-filter" data-f="off">停用</button>
+    <input type="search" class="search" id="sc-p-search" placeholder="搜索 QQ 号或备注">
+  </div>
+  <div class="list" id="sc-p-list"></div>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <div class="card-title">拒绝名单</div>
+    <span class="count">命中就完全不回</span>
+    <div class="spacer"></div>
+  </div>
+  <div class="formgrid">
+    <div class="field"><label>拒绝的群号（逗号分隔）</label><input id="sc-dn-groups" placeholder="123456789, 987654321"><div class="hint">比「停用」更硬：这些人发什么都不回，连日志都不记。</div></div>
+    <div class="field"><label>拒绝的私聊 QQ（逗号分隔）</label><input id="sc-dn-private" placeholder="1000000001"><div class="hint">留空表示不拒绝任何号。</div></div>
+  </div>
+  <div class="field-actions"><button class="btn primary" id="sc-dn-save">保存拒绝名单</button><span class="hint" id="sc-dn-toast"></span></div>
+</section>
+
+<section class="card">
+  <div class="card-head"><div class="card-title">管理员与端口</div><div class="spacer"></div></div>
+  <div class="formgrid">
+    <div class="field"><label>管理员 QQ</label><input id="ownerQQ" placeholder="1000000001"></div>
+    <div class="field"><label>控制台端口</label><input id="consolePort" placeholder="3100"></div>
+  </div>
+  <div class="field">
     <label>控制台令牌 <span class="hint" id="ct-mask" style="display:inline"></span></label>
     <input id="consoleToken" type="password" placeholder="留空表示不修改" autocomplete="off">
-    <div class="hint">管理员可以私聊让机器人改配置；控制台令牌是 /?token= 那串。</div>
-    <div class="toast" id="toast4"></div>
+    <div class="hint">管理员 @ 你也能在静默时段叫醒，还能私聊让机器人改配置。控制台令牌是 /?token= 那串。</div>
   </div>
-  <div class="card span2">
-    <button class="primary" id="btn-save2">保存配置</button>
-    <div class="hint" style="margin-top:8px">改完需要重启机器人（启动与状态页 → 停止 → 启动）才生效。</div>
+  <div class="field-actions">
+    <button class="btn primary" id="btn-save2">保存</button>
+    <span class="hint">改完需要重启机器人（启动与状态页 → 停止 → 启动）才生效。</span>
   </div>
-</div>`;
+</section>`;
 $('main').appendChild(allowView);
 
 // ── 自建页：关窗行为 ────────────────────────────────────
@@ -467,23 +802,30 @@ closeView.dataset.view = 'close';
 closeView.innerHTML = head('ON CLOSE', '关窗行为', '右上角把控制面板关掉之后，机器人和 QQ 网关要不要继续跑。选完会记住，下次打开还是这个。') + `
 <div class="grid">
   <div class="card">
-    <h2>关掉窗口时</h2>
-    <label class="choice"><input type="radio" name="closeAction" value="keep" checked> 继续在后台运行（推荐）</label>
-    <div class="hint" style="margin-left:26px;margin-top:2px">窗口关掉，机器人和网关都不停。下次双击 start.bat 只是把窗口重新打开，不会重复起进程。</div>
-    <label class="choice"><input type="radio" name="closeAction" value="stop"> 一并停止机器人和网关</label>
-    <div class="hint" style="margin-left:26px;margin-top:2px">关窗口等于全部关掉，QQ 也会下线；下次要重新点启动、必要时重新扫码。</div>
-    <div class="hint" style="margin-top:16px" id="close-hint">现在是：关窗后继续运行。</div>
-    <div class="toast" id="toast-close"></div>
+    <div class="card-head"><h2 class="card-title">关掉窗口时</h2></div>
+    <label class="choice">
+      <input type="radio" name="closeAction" value="keep" checked>
+      <span class="choice-txt"><b>收进托盘，继续在后台运行</b>机器人和网关都不停。下次从托盘点回来，或再双击一次，只是把窗口打开，不会重复起进程。</span>
+    </label>
+    <label class="choice">
+      <input type="radio" name="closeAction" value="stop">
+      <span class="choice-txt"><b>一并停止机器人和网关</b>关窗口等于全部关掉，QQ 会下线；下次要重新点启动，必要时重新扫码。</span>
+    </label>
+    <div class="field">
+      <div class="hint" id="close-hint">现在是：关窗后继续运行。</div>
+    </div>
   </div>
 
   <div class="card">
-    <h2>怎么判定「真关了」</h2>
-    <div class="hint" style="margin:0;line-height:1.9">
-      · 点右上角 × 才算关闭，刷新页面不算。<br>
-      · 关窗时页面会发一个信号，服务端挂起 3 秒；这 3 秒里有新页面打开就撤销。<br>
-      · 所以按 F5、或者重新打开面板，都不会把机器人停掉。
+    <div class="card-head"><h2 class="card-title">怎么判定「真关了」</h2></div>
+    <div class="field">
+      <div class="hint">
+        · 点右上角 × 才算关闭，刷新页面不算。<br>
+        · 关窗时页面发一个信号，服务端挂起 3 秒；这 3 秒里有新页面打开就撤销。<br>
+        · 所以按 F5、或者重新打开面板，都不会把机器人停掉。
+      </div>
+      <div class="hint">想让机器人一直挂着，就选第一种，然后直接把窗口关掉。</div>
     </div>
-    <div class="hint" style="margin-top:14px">想让机器人一直挂着，就选第一种，然后直接把窗口关掉。</div>
   </div>
 </div>`;
 $('main').appendChild(closeView);
@@ -494,96 +836,218 @@ qqView.className = 'view pad';
 qqView.dataset.view = 'qq';
 qqView.innerHTML = head('QQ LAUNCH', 'QQ 启动', '网关是往正在运行的 QQ 里注入的，所以 QQ 得先开着。这里记下 QQ 装在哪，以及启动面板时要不要顺手把它拉起来。') + `
 <div class="grid">
-  <div class="card span2" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-    <i class="led" id="qq-led" style="width:12px;height:12px;flex:0 0 12px"></i>
-    <div style="min-width:220px">
-      <div id="qq-now" style="font-size:17px;font-weight:600">读取中…</div>
-      <div class="hint" id="qq-now-sub" style="margin-top:3px"></div>
+  <div class="card span2 live-card">
+    <div class="live-top">
+      <i class="led" id="qq-led"></i>
+      <div class="live-main">
+        <div class="live-state" id="qq-now" style="font-size:17px">读取中…</div>
+        <div class="live-sub" id="qq-now-sub"></div>
+      </div>
+      <div class="live-facts" id="qq-now-facts"></div>
+      <button id="qq-start" class="btn mini primary">现在启动 QQ</button>
     </div>
-    <div id="qq-now-facts" style="margin-left:auto;display:flex;gap:26px;text-align:right;flex-wrap:wrap"></div>
-    <button id="qq-start" style="margin-left:8px">现在启动 QQ</button>
   </div>
 
   <div class="card span2">
-    <h2>QQ 装在哪</h2>
-    <div class="hint">填 <code>QQ.exe</code> 的完整路径。不知道就点「自动探测」，它会先看正在运行的 QQ、再查注册表。</div>
-    <div class="two" style="margin-top:12px">
-      <div>
+    <div class="card-head"><h2 class="card-title">QQ 装在哪</h2></div>
+    <div class="formgrid">
+      <div class="field" style="grid-column:1 / -1">
         <label>QQ.exe 路径</label>
-        <input id="qq-path" placeholder="例如 F:\\QQNT\\QQ.exe">
-      </div>
-      <div style="display:flex;align-items:flex-end;gap:10px;padding-bottom:1px">
-        <button id="qq-detect">自动探测</button>
-        <button id="qq-pick">浏览…</button>
+        <input id="qq-path" placeholder="例如 F:\QQNT\QQ.exe">
+        <div class="hint">填 <code>QQ.exe</code> 的完整路径。不知道就点「自动探测」，它会先看正在运行的 QQ、再查注册表。</div>
       </div>
     </div>
-    <div class="hint" id="qq-path-hint" style="margin-top:10px"></div>
+    <div class="field">
+      <div class="field-actions">
+        <button id="qq-detect" class="btn mini">自动探测</button>
+        <button id="qq-pick" class="btn mini">浏览…</button>
+        <span class="hint" id="qq-path-hint"></span>
+      </div>
+    </div>
   </div>
 
   <div class="card span2">
-    <h2>启动时自动打开 QQ</h2>
-    <label style="display:flex;align-items:center;gap:8px;font-weight:500">
-      <input type="checkbox" id="qq-auto" style="width:auto" checked> 面板启动时，如果 QQ 没开就先把它启动起来
+    <div class="card-head"><h2 class="card-title">启动时自动打开 QQ</h2></div>
+    <label class="choice">
+      <input type="checkbox" id="qq-auto" checked>
+      <span class="choice-txt"><b>面板启动时，如果 QQ 没开就先把它启动起来</b>打开后双击启动面板会先检查 QQ：没在跑就把 QQ 拉起来，然后再启动网关和机器人。</span>
     </label>
-    <div class="hint" style="margin-top:10px">打开这个开关后，双击启动面板会先检查 QQ：没在跑就把 QQ 拉起来，然后再启动网关和机器人。</div>
-    <div class="hint" style="margin-top:4px">程序只能把窗口叫起来，不能替你登录。</div>
-    <div style="margin-top:16px;display:flex;align-items:center;gap:12px">
-      <button class="primary" id="qq-save">保存配置</button>
-      <span class="hint">保存后下次启动生效，不用重启网关。</span>
+    <div class="field">
+      <div class="hint">程序只能把窗口叫起来，不能替你登录。</div>
     </div>
-    <div class="toast" id="qq-toast"></div>
+    <div class="field">
+      <div class="field-actions">
+        <button class="primary" id="qq-save">保存配置</button>
+        <span class="hint">保存后下次启动生效，不用重启网关。</span>
+      </div>
+    </div>
   </div>
 </div>`;
 $('main').appendChild(qqView);
 
 // ── 自建页：静默时间 ────────────────────────────────────
+// 运行总览页已合并进「启动与状态」：两页原本是同一份内容，留一页即可。
+
+// ── 运行总览 ─────────────────────────────────────────────
+// 链路 + 机器人状态 + 今日计数 + 实时日志。数据全部来自桥接，
+// 面板只负责画，免得两边判定标准越走越远。
+function ovSetLed(id, ok, warn) {
+  const e = $(id);
+  if (e) e.className = 'led' + (ok ? ' ok' : warn ? ' warn' : '');
+}
+function ovSetSt(id, ok, warn) {
+  const e = $(id);
+  if (!e) return;
+  e.textContent = ok ? '在线' : warn ? '启动中' : '离线';
+  e.className = 'conn-state' + (ok ? ' ok' : warn ? ' warn' : '');
+}
+const OV_REASON = {
+  atMention: '被 @', nameMention: '叫名字', question: '被提问', poke: '拍一拍',
+  proactiveCheck: '主动搭话', replyCheck: '等回复', admin: '手动', probability: '随机醒', anyMessage: '新消息'
+};
+let ovRole = '';
+async function loadOverview() {
+  // 链路 + 今日主动搭话
+  try {
+    const s = await api('status');
+    const gw = s.snowluma || {}, bot = s.bot || {}, cfg = s.config || {};
+    const botUp = !!(bot.running);
+    ovSetLed('ov-led-5099', !!gw.webui, !!gw.running);
+    ovSetSt('ov-st-5099', !!gw.webui, !!gw.running && !gw.webui);
+    ovSetLed('ov-led-38000', !!gw.onebotHttp, !!gw.running);
+    ovSetSt('ov-st-38000', !!gw.onebotHttp, !!gw.running && !gw.onebotHttp);
+    ovSetLed('ov-led-38001', !!gw.onebotWs, !!gw.running);
+    ovSetSt('ov-st-38001', !!gw.onebotWs, !!gw.running && !gw.onebotWs);
+    ovSetLed('ov-led-3101', botUp, false);
+    ovSetSt('ov-st-3101', botUp, false);
+    if ($('ov-console-sub')) $('ov-console-sub').textContent = '127.0.0.1:' + (cfg.consolePort || 3100);
+    try {
+      const bk = await consoleFetch('/api/status');
+      if (bk && bk.role) ovRole = String(bk.role);
+    } catch { /* 昵称拿不到就算了 */ }
+    const t = cfg.today || {};
+    if ($('ov-proactive')) {
+      $('ov-proactive').innerHTML = (t.proactiveMax ? (t.proactive + ' <small>/ ' + t.proactiveMax + '</small>') : String(t.proactive ?? 0));
+    }
+    if ($('ov-turns')) $('ov-turns').textContent = String(t.spoken ?? 0);
+    if ($('ov-convs')) $('ov-convs').textContent = String(t.conversations ?? 0);
+  } catch { /* 面板连不上桥接时保持 '—' */ }
+
+  // 机器人状态 + 日志
+  try {
+    const d = await api('live');
+    const list = Array.isArray(d.conversations) ? d.conversations : [];
+    const main = list[0] || {};
+    const quiet = d.quiet || {};
+    const busy = (d.busyKeys || []).length > 0;
+    let label = '待命', sub = '在等消息。', led = 'ok';
+    if (d.paused) { label = '已暂停'; sub = '控制台里暂停了收发。'; led = ''; }
+    else if (busy) { label = '思考中'; sub = '正在读消息、组织回复。'; led = 'ok'; }
+    else if (quiet.state && quiet.state !== 'normal') { label = '静默中'; sub = (quiet.reason || '') + '；到点自动恢复。'; led = 'warn'; }
+    else if (list.some((c) => c.observing)) { label = '观察中'; sub = '刚说完，等对方接话。'; led = 'ok'; }
+    else if (list.some((c) => c.pendingWake)) { label = '准备唤醒'; sub = '马上要开口。'; led = 'ok'; }
+    else if (list.some((c) => c.sleeping)) { label = '潜水中'; sub = '已进入潜水，有人叫它就会醒。'; led = 'ok'; }
+    else if (list.length) { label = '待唤醒'; sub = '在潜水，还没到点。'; led = ''; }
+    else { label = '待命'; sub = '还没开始跑。'; led = ''; }
+    if ($('ov-state')) $('ov-state').textContent = label;
+    if ($('ov-state-sub')) {
+      const gid = String(main.key || '').startsWith('group:') ? String(main.key).slice(6) : '';
+      $('ov-state-sub').textContent = (ovRole ? ovRole + (gid ? ' · 群 ' + gid : '') : sub);
+    }
+    ovSetLed('ov-state-led', led === 'ok', led === 'warn');
+    if ($('ov-wake')) $('ov-wake').textContent = main.lastWakeReason ? (OV_REASON[main.lastWakeReason] || main.lastWakeReason) : '—';
+    if ($('ov-wake') && main.lastIncomingAt) $('ov-wake').innerHTML = (main.lastWakeReason ? (OV_REASON[main.lastWakeReason] || main.lastWakeReason) : '—') + ' <small>· ' + fmtAgo(main.lastIncomingAt) + '</small>';
+    if ($('ov-talk')) $('ov-talk').textContent = main.lastAiReplyAt ? fmtAgo(main.lastAiReplyAt) : '还没说过';
+    if ($('ov-unread')) $('ov-unread').textContent = list.reduce((n, c) => n + (Number(c.unread) || 0), 0) + ' 条';
+    if ($('ov-convs')) $('ov-convs').textContent = String(list.length);
+    if ($('ov-quiet')) {
+      $('ov-quiet').textContent = (quiet.state && quiet.state !== 'normal')
+        ? ('静默中 · ' + (quiet.until ? fmtClock(quiet.until) + ' 结束' : '到点恢复'))
+        : '不在';
+    }
+  } catch { /* 忽略 */ }
+
+  // 今日用量
+  try {
+    const r = await consoleFetch('/api/tokens/summary');
+    if (r && r.ok) {
+      const tot = r.totals || {};
+      if ($('ov-cost')) $('ov-cost').textContent = tkNum(tot.totalTokens ?? 0);
+    }
+  } catch { /* 忽略 */ }
+
+  // 实时日志
+  try {
+    const r = await api('logs?which=bridge&tail=60');
+    const box = $('ov-log');
+    if (box) {
+      const lines = Array.isArray(r.lines) ? r.lines : [];
+      if (!lines.length) box.innerHTML = '<div class="info" style="color:var(--muted)">（还没有日志）</div>';
+      else box.innerHTML = lines.map((l) => '<div class="' + logLevelOf(l) + '">' + scopeEsc(l) + '</div>').join('');
+      box.scrollTop = box.scrollHeight;
+    }
+    if ($('ov-log-at')) $('ov-log-at').textContent = fmtClock(Date.now());
+  } catch { /* 忽略 */ }
+}
+
 const quietView = document.createElement('section');
 quietView.className = 'view pad';
 quietView.dataset.view = 'quiet';
 quietView.innerHTML = head('QUIET HOURS', '静默时间', '到了静默时段，机器人不主动说话、也不等回复；只有管理员 @ 或引用才会回，回完就停。时间按 UTC+8 算，跟电脑时区无关。') + `
 <div class="grid">
-  <div class="card span2" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-    <i class="led" id="q-led" style="width:12px;height:12px;flex:0 0 12px"></i>
-    <div style="min-width:200px">
-      <div id="q-now" style="font-size:17px;font-weight:600">读取中…</div>
-      <div class="hint" id="q-now-sub" style="margin-top:3px"></div>
+  <div class="card span2 live-card">
+    <div class="live-top">
+      <i class="led" id="q-led"></i>
+      <div class="live-main">
+        <div class="live-state" id="q-now" style="font-size:17px">读取中…</div>
+        <div class="live-sub" id="q-now-sub"></div>
+      </div>
+      <div class="live-facts" id="q-now-facts"></div>
     </div>
-    <div id="q-now-facts" style="margin-left:auto;display:flex;gap:26px;text-align:right;flex-wrap:wrap"></div>
   </div>
 
   <div class="card">
-    <h2>工作日</h2>
-    <div class="hint">周一至周五算工作日；法定节假日会自动排除，调休补班日算上班。</div>
-    <div id="q-weekdays" style="display:flex;gap:6px;flex-wrap:wrap;margin:12px 0"></div>
+    <div class="card-head"><h2 class="card-title">工作日</h2></div>
+    <div class="field">
+      <div class="hint">周一至周五算工作日；法定节假日会自动排除，调休补班日算上班。</div>
+    </div>
+    <div id="q-weekdays" class="wdays"></div>
     <div id="q-workday-rows"></div>
-    <button id="q-add-workday" style="margin-top:4px">+ 加一个时段</button>
+    <div class="field">
+      <div class="field-actions"><button id="q-add-workday" class="btn mini">+ 加一个时段</button></div>
+    </div>
   </div>
 
   <div class="card">
-    <h2>周末与法定节假日</h2>
-    <div class="hint">默认留空 = 全天正常，不静默。想周末也午休就在下面加时段。</div>
-    <div id="q-offday-rows" style="margin-top:12px"></div>
-    <button id="q-add-offday" style="margin-top:4px">+ 加一个时段</button>
+    <div class="card-head"><h2 class="card-title">周末与法定节假日</h2></div>
+    <div class="field">
+      <div class="hint">默认留空 = 全天正常，不静默。想周末也午休就在下面加时段。</div>
+    </div>
+    <div id="q-offday-rows"></div>
+    <div class="field">
+      <div class="field-actions"><button id="q-add-offday" class="btn mini">+ 加一个时段</button></div>
+    </div>
   </div>
 
   <div class="card span2">
-    <label style="display:flex;align-items:center;gap:8px;font-weight:500">
-      <input type="checkbox" id="q-enabled" style="width:auto"> 启用静默时段
+    <div class="card-head"><h2 class="card-title">开关</h2></div>
+    <label class="choice">
+      <input type="checkbox" id="q-enabled">
+      <span class="choice-txt"><b>启用静默时段</b>关掉之后机器人整天都正常说话，不看下面的时段。</span>
     </label>
-    <div class="two" style="margin-top:12px">
-      <div>
-        <label>节假日日历</label>
-        <select id="q-holidays" style="width:100%;padding:9px 11px;border:1px solid var(--card-border);border-radius:9px;background:var(--surface);color:var(--text);font:inherit">
-          <option value="cn">中国大陆（自动拉取法定节假日与调休）</option>
-          <option value="none">不识别节假日，只按星期判断</option>
-        </select>
+    <div class="field">
+      <label>节假日日历</label>
+      <select id="q-holidays">
+        <option value="cn">中国大陆（自动拉取法定节假日与调休）</option>
+        <option value="none">不识别节假日，只按星期判断</option>
+      </select>
+    </div>
+    <div class="field">
+      <div class="field-actions">
+        <button class="primary" id="q-save">保存并立即生效</button>
+        <span class="hint">保存后不用重启机器人。</span>
       </div>
     </div>
-    <div style="margin-top:16px;display:flex;align-items:center;gap:12px">
-      <button class="primary" id="q-save">保存并立即生效</button>
-      <span class="hint">保存后不用重启机器人。</span>
-    </div>
-    <div class="toast" id="q-toast"></div>
   </div>
 </div>`;
 $('main').appendChild(quietView);
@@ -595,95 +1059,147 @@ personalizeView.dataset.view = 'personalize';
 personalizeView.innerHTML = head('PERSONALITY', '个性', '把「机器人平时怎么说话」做成开关。改完立即生效，不用重启网关或机器人。') + `
 <div class="grid">
   <div class="card span2">
-    <h2>问候发语音</h2>
-    <label class="choice" style="margin-top:10px">
+    <div class="card-head"><h2 class="card-title">问候发语音</h2></div>
+    <label class="choice">
       <input type="checkbox" id="pg-greeting">
-      <span>说「早安 / 晚安 / 在吗」这类问候时，优先用语音说出来</span>
+      <span class="choice-txt"><b>说「早安 / 晚安 / 在吗」这类问候时，优先用语音说出来</b>打开后问候一律走 <code>qq_tts_say</code>：先发语音，再自动补一条「日语 + 中文字幕」。合成失败（没配 key、限流、超时、文本太长）会自动退回纯文字，不会发不出去。</span>
     </label>
-    <div class="hint" style="margin-top:10px">打开后，问候一律走 <code>qq_tts_say</code>：先发语音，再自动补一条「日语 + 中文字幕」。合成失败（没配 key、限流、超时、文本太长）会自动退回纯文字，不会发不出去。</div>
-    <div class="hint" style="margin-top:4px">声音用的是当前角色的角色包音色；角色包里没写音色的角色不会发声，只会打字。</div>
+    <div class="field">
+      <div class="hint">声音用的是当前角色的角色包音色；角色包里没写音色的角色不会发声，只会打字。</div>
+    </div>
   </div>
 
   <div class="card span2">
-    <h2>夜间催睡</h2>
-    <label class="choice" style="margin-top:10px">
+    <div class="card-head"><h2 class="card-title">夜间催睡表情包</h2></div>
+    <label class="choice">
       <input type="checkbox" id="pg-night">
-      <span>每天到点，自动发一句「该睡了」+ 一个表情包</span>
+      <span class="choice-txt"><b>每天到点，自动发一句「该睡了」+ 一个表情包</b>到点由程序直接发，不经过模型，所以模型在潜水也不会漏。静默时段、暂停、非二代模式下不发；每个群每天只发一次，也不占主动搭话的次数。</span>
     </label>
-    <div class="hint" style="margin-top:10px">到点由程序直接发，不经过模型，所以模型在潜水也不会漏。静默时段、暂停、非二代模式下不发；每个群每天只发一次，也不占主动搭话的次数。</div>
-    <div class="two" style="margin-top:14px">
-      <div>
+    <div class="formgrid">
+      <div class="field">
         <label>每天几点发</label>
         <input type="time" id="pg-at">
       </div>
-      <div>
+      <div class="field">
         <label>补发窗口（分钟）</label>
         <input type="number" id="pg-window" min="1" max="180" step="1" placeholder="20">
       </div>
     </div>
-    <div style="margin-top:12px">
+    <div class="field">
       <label>配哪个表情</label>
-      <select id="pg-sticker" style="width:100%;padding:9px 11px;border:1px solid var(--card-border);border-radius:9px;background:var(--surface);color:var(--text);font:inherit">
+      <select id="pg-sticker">
         <option value="">（不发表情，只发文字）</option>
       </select>
-      <div class="hint" style="margin-top:6px">列表来自这个 QQ 号收藏的表情；想加新的，先在 QQ 里收藏。</div>
+      <div class="hint">列表来自这个 QQ 号收藏的表情；想加新的，先在 QQ 里收藏。</div>
     </div>
-    <div class="two" style="margin-top:12px">
-      <div>
+    <div class="formgrid">
+      <div class="field">
         <label>日语台词</label>
         <input id="pg-ja" placeholder="あら～、もう23時ですよ～">
       </div>
-      <div>
+      <div class="field">
         <label>中文字幕</label>
         <input id="pg-zh" placeholder="哎呀～已经23点啦～">
       </div>
     </div>
-    <div class="hint" style="margin-top:8px">两段都留空就只发表情；只填中文就只发中文。</div>
-    <div style="margin-top:18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <button class="primary" id="pg-save">保存</button>
-      <span class="hint">保存立即生效。</span>
+    <div class="field">
+      <div class="hint">两段都留空就只发表情；只填中文就只发中文。</div>
+      <div class="field-actions">
+        <button class="primary" id="pg-save">保存</button>
+        <span class="hint">保存立即生效。</span>
+      </div>
     </div>
-    <div class="toast" id="pg-toast"></div>
   </div>
 </div>`;
 $('main').appendChild(personalizeView);
+
+const chatView = document.createElement('section');
+chatView.className = 'view pad';
+chatView.dataset.view = 'chat';
+chatView.innerHTML = head('CHAT BEHAVIOR', '聊天行为', '她什么时候自己开口、一次能说多少，都在这里。') + `
+<div class="card">
+  <div class="card-head"><div class="card-title">主动搭话</div><span class="count">没人说话时自己开口</span></div>
+  <div class="opt"><div><div class="opt-name">启用主动搭话</div><div class="opt-sub">关掉之后她只回应别人，不自己找话题</div></div><label class="switch"><input type="checkbox" id="paEnabled"><span></span></label></div>
+  <div class="opt"><div><div class="opt-name">在群里主动开口</div><div class="opt-sub">群里安静一段时间后，她可以自己起个话题</div></div><label class="switch"><input type="checkbox" id="paGroup"><span></span></label></div>
+  <div class="opt"><div><div class="opt-name">主动私聊戳人</div><div class="opt-sub">默认关。开了会主动给你发私聊</div></div><label class="switch"><input type="checkbox" id="paPrivate"><span></span></label></div>
+  <div class="formgrid">
+    <div class="field"><label>多久检查一次（分钟）</label><div style="display:flex;gap:8px;align-items:center"><input id="paMin" type="number" min="1" step="1"><span style="color:var(--muted)">~</span><input id="paMax" type="number" min="1" step="1"></div><div class="hint">在这个区间里随机挑一次机会。</div></div>
+    <div class="field"><label>安静多久才开口（分钟）</label><input id="paIdle" type="number" min="1" step="1"><div class="hint">群里这么久没人说话，才算「冷场」。</div></div>
+    <div class="field"><label>触发概率（0 ~ 1）</label><input id="paProb" type="number" step="0.05" min="0" max="1"><div class="hint">0.5 表示一半的机会真的开口。</div></div>
+    <div class="field"><label>每天最多几次（0 = 不限）</label><input id="paMaxDay" type="number" min="0" step="1"><div class="hint">超过就不再主动开口。</div></div>
+    <div class="field"><label>夜间不打扰</label><div style="display:flex;gap:8px;align-items:center"><input id="paNightFrom" type="time"><span style="color:var(--muted)">—</span><input id="paNightTo" type="time"></div><div class="hint">这段时间内不主动，排到结束之后。</div></div>
+    <div class="field"><label>活跃窗口（天，0 = 不限）</label><input id="paWindow" type="number" min="0" step="1"><div class="hint">最近这么多天里聊过的会话才算数。</div></div>
+  </div>
+  <div class="field-actions"><button class="btn primary" id="pa-save">保存主动搭话</button><span class="hint" id="pa-toast"></span></div>
+</div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">说话上限</div><span class="count">防刷屏</span></div>
+  <div class="formgrid">
+    <div class="field"><label>每分钟最多几条</label><input id="spPerMin" type="number" min="1" step="1"><div class="hint">超过就排队，不会丢。</div></div>
+    <div class="field"><label>每小时最多几条</label><input id="spPerHour" type="number" min="1" step="1"><div class="hint">连发很多轮时的总闸。</div></div>
+    <div class="field"><label>单条最多字数</label><input id="spChars" type="number" min="20" step="10"><div class="hint">超出会被截断。</div></div>
+    <div class="field"><label>一次连发最多几条</label><input id="spBurst" type="number" min="1" step="1"><div class="hint">她习惯分几条说，这是上限。</div></div>
+    <div class="field"><label>连发间隔（秒）</label><div style="display:flex;gap:8px;align-items:center"><input id="spGapMin" type="number" min="0" step="0.1"><span style="color:var(--muted)">~</span><input id="spGapMax" type="number" min="0" step="0.1"></div><div class="hint">两条消息之间随机停这么久。</div></div>
+  </div>
+  <div class="field-actions"><button class="btn primary" id="sp-save">保存说话上限</button><span class="hint" id="sp-toast"></span></div>
+</div>
+`;
+$('main').appendChild(chatView);
 
 // ── 自建页：角色包 ──────────────────────────────────────
 const rolepackView = document.createElement('section');
 rolepackView.className = 'view pad';
 rolepackView.dataset.view = 'rolepack';
 rolepackView.innerHTML = head('ROLE PACK', '角色包', '音色、唤醒别名、注音字典、世界观，一个角色一份，跟着角色走。') + `
-<div class="grid">
+<div class="grid" style="grid-template-columns:280px 1fr">
   <div class="card">
-    <h2>角色</h2>
-    <div id="rp-list" style="display:flex;flex-direction:column;gap:6px"></div>
-    <div class="hint" style="margin-top:12px">没有包的角色会用 config 里的默认音色和别名兜底。</div>
+    <div class="card-head"><h2 class="card-title">角色</h2></div>
+    <div id="rp-list" class="rl-list"></div>
+    <div class="field">
+      <div class="hint">没有包的角色不会发语音（只打字），别名与世界观也用它自己的名字兜底。</div>
+    </div>
   </div>
   <div class="card">
-    <h2>角色包内容</h2>
-    <label>角色</label>
-    <input id="rp-role" readonly placeholder="先从左边选一个">
-    <label>音色 ID</label>
-    <input id="rp-voice" placeholder="Fish Audio 的 reference_id">
-    <label>唤醒别名（每行一个）</label>
-    <textarea id="rp-aliases" placeholder="七草はづき&#10;叶月"></textarea>
-    <label>注音字典（JSON 对象）</label>
-    <textarea id="rp-dict" placeholder='{ "七草はづき": "na1na0kU0sa1ha1zu0ki0" }' style="min-height:130px;font-family:ui-monospace,monospace;font-size:12.5px"></textarea>
-    <label>世界观名</label>
-    <input id="rp-world" placeholder="对应 world.json 里的名字">
-    <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
-      <button class="primary" id="rp-save">保存角色包</button>
-      <button id="rp-fill">用当前配置填充</button>
-      <button class="danger" id="rp-del">删除角色包</button>
+    <div class="card-head"><h2 class="card-title">角色包内容</h2></div>
+    <div class="field">
+      <label>角色</label>
+      <input id="rp-role" readonly placeholder="先从左边选一个">
     </div>
-    <div class="toast" id="rp-toast"></div>
-    <div class="hint" style="margin-top:10px">保存后立刻生效：桥接每次合成前都会重新读角色包，不用重启。</div>
+    <div class="field">
+      <label>音色 ID</label>
+      <input id="rp-voice" placeholder="Fish Audio 的 reference_id">
+      <div class="hint">留空 = 这个角色不发声。</div>
+    </div>
+    <div class="field">
+      <label>唤醒别名（每行一个）</label>
+      <textarea id="rp-aliases" placeholder="七草はづき&#10;叶月"></textarea>
+    </div>
+    <div class="field">
+      <label>注音字典（JSON 对象）</label>
+      <textarea id="rp-dict" placeholder='{ "七草はづき": "na1na0kU0sa1ha1zu0ki0" }' style="min-height:130px;font-family:ui-monospace,monospace;font-size:12.5px"></textarea>
+    </div>
+    <div class="field">
+      <label>世界观名</label>
+      <input id="rp-world" placeholder="对应 world.json 里的名字">
+    </div>
+    <div class="field">
+      <div class="field-actions">
+        <button class="primary" id="rp-save">保存角色包</button>
+        <button id="rp-fill" class="btn mini">用当前配置填充</button>
+        <button class="danger" id="rp-del">删除角色包</button>
+      </div>
+      <div class="hint">保存后立刻生效：桥接每次合成前都会重新读角色包，不用重启。</div>
+    </div>
   </div>
 </div>`;
 $('main').appendChild(rolepackView);
 
 // ── 页面切换 ────────────────────────────────────────────
 function go(id) {
+  const m = document.getElementById('main');
+  if (m) m.scrollTop = 0;
+
   active = id;
   for (const b of document.querySelectorAll('.nav-item')) b.classList.toggle('active', b.dataset.nav === id);
   for (const v of document.querySelectorAll('.view')) v.hidden = v.dataset.view !== id;
@@ -693,8 +1209,11 @@ function go(id) {
     if (id === 'rolepack') void loadRolePacks();
     if (id === 'quiet') void loadQuiet();
     if (id === 'close') void loadCloseSetting();
+    if (id === 'chat') void loadChat();
     if (id === 'qq') void loadQQ();
     if (id === 'personalize') void loadPersonalize();
+    if (id === 'allow') void loadScope();
+    if (id === 'usage') void loadUsage();
     return;
   }
   showConsolePage(id);
@@ -718,19 +1237,39 @@ function showConsolePage(page) {
           .topbar{display:none!important}
           .skip-link{display:none!important}
           .bg-decor{display:none!important}
-          main{padding-top:22px!important}
+          .page-heading{display:none!important}
+          /* 这三块在面板里有独立入口，控制台这边不再重复露出 */
+          #section-whitelist{display:none!important}
+          #section-silent{display:none!important}
+          main{padding:0 0 28px!important}
+          body{background:transparent!important}
+          .card{border-radius:12px!important;box-shadow:none!important}
+          .card:hover{transform:none!important}
         `;
         doc.head.appendChild(st);
+        // 「二代仿真」里的发送限制折叠区与「聊天行为」页重复，面板里隐藏（控制台本身不动）。
+        try {
+          for (const d of doc.querySelectorAll('details.settings-group')) {
+            const s = d.querySelector('summary');
+            if (s && /发送限制/.test(s.textContent)) d.style.display = 'none';
+          }
+        } catch (e) {}
         guardConsoleDeletes(doc, frame.contentWindow);
+        setTimeout(() => { try { const w = frame.contentWindow; if (w && typeof w.refresh === 'function') void w.refresh(); } catch (e) {} }, 2500);
         if (typeof frame.contentWindow.setConsolePage === 'function' && framePage) {
           frame.contentWindow.setConsolePage(framePage, { updateHash: false });
         }
       } catch (e) { /* 同源失败就退回普通 iframe 行为 */ }
     };
     const view = document.createElement('section');
-    view.className = 'view';
+    view.className = 'view embed';
     view.dataset.view = '__console';
-    view.appendChild(frame);
+    const shell = document.createElement('div');
+    shell.className = '';
+    shell.style.cssText = 'height:100vh;overflow:hidden;background:transparent';
+    frame.style.cssText = 'width:100%;height:100vh;border:0;display:block;background:var(--surface)';
+    shell.appendChild(frame);
+    view.appendChild(shell);
     $('main').appendChild(view);
   }
   const view = document.querySelector('.view[data-view="__console"]');
@@ -764,10 +1303,19 @@ async function api(path, options) {
   return data;
 }
 function toast(id, text, isErr) {
-  const el = $(id);
-  if (!el) return;
-  el.textContent = text;
+  let host = document.getElementById('toast-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'toast-host';
+    host.className = 'toast-host';
+    document.body.appendChild(host);
+  }
+  const el = document.createElement('div');
   el.className = isErr ? 'toast err' : 'toast';
+  el.textContent = String(text ?? '');
+  host.appendChild(el);
+  setTimeout(() => { el.style.transition = 'opacity .25s'; el.style.opacity = '0'; }, 2300);
+  setTimeout(() => { el.remove(); }, 2700);
 }
 
 // ── 破坏性操作确认层 ────────────────────────────────────
@@ -831,6 +1379,18 @@ function guardConsoleDeletes(doc, win) {
   }, true);
 }
 function led(id, state) { const e = $(id); if (e) e.className = 'led ' + (state || ''); }
+// 一排绿灯：灯色 + 旁边的状态字，别让人靠猜。
+const CONN_TEXT = { ok: '在线', warn: '启动中', '': '离线' };
+function connState(port, state) {
+  const cls = state || '';
+  const lamp = $('lamp-' + port);
+  if (lamp) lamp.className = 'led' + (cls ? ' ' + cls : '');
+  const text = $('st-' + port);
+  if (text) {
+    text.textContent = CONN_TEXT[cls] || '离线';
+    text.className = 'conn-state ' + cls;
+  }
+}
 
 async function refreshStatus() {
   try {
@@ -860,17 +1420,24 @@ async function refreshStatus() {
     $('foot-dot').className = 'dot ' + (botRunning && gw.onebotWs ? 'ok' : gw.running ? 'warn' : '');
     $('foot-text').textContent = botRunning ? (gw.onebotWs ? '运行中' : '机器人已启动，QQ 未上线') : '未启动';
 
-    const p = (v) => (v ? '<span style="color:var(--ok)">在线</span>' : '<span style="color:var(--muted-soft)">离线</span>');
-    $('m-webui').innerHTML = p(gw.webui);
-    $('m-http').innerHTML = p(gw.onebotHttp);
-    $('m-ws').innerHTML = p(gw.onebotWs);
-    $('m-console').innerHTML = p(botRunning);
+    // 四盏灯：亮=在线，黄=在跑但没准备好，灭=离线。
+    connState('5099', gw.webui ? 'ok' : gw.running ? 'warn' : '');
+    connState('38000', gw.onebotHttp ? 'ok' : gw.running ? 'warn' : '');
+    connState('38001', gw.onebotWs ? 'ok' : gw.running ? 'warn' : '');
+    connState('3101', botRunning ? 'ok' : '');
+    if ($('pid-gw')) $('pid-gw').textContent = gw.pid ? String(gw.pid) : (gw.running ? '外部进程' : '—');
+    if ($('pid-bot')) $('pid-bot').textContent = bot.pid ? String(bot.pid) : (botRunning ? '外部进程' : '—');
+    if ($('meta-bot')) {
+      const backLabel = s.config?.backend === 'dsh' ? 'DSH' : '内置';
+      $('meta-bot').textContent = botRunning
+        ? '运行中 · 后端 ' + backLabel + (gw.onebotWs ? ' · QQ 已在线' : ' · 等 QQ 上线')
+        : '未运行';
+    }
     if (s.config) {
-      $('m-console-port').textContent = ':' + (s.config.consolePort || 3100);
+      if ($('pid-bot-port')) $('pid-bot-port').textContent = String(s.config.consolePort || 3100);
+      if ($('lamp-console-port')) $('lamp-console-port').textContent = '127.0.0.1:' + String(s.config.consolePort || 3100);
       if (!$('baseUrl').value) $('baseUrl').value = s.config.baseUrl || '';
       if (!$('model').value) $('model').value = s.config.model || '';
-      if (!$('groups').value) $('groups').value = (s.config.groups || []).join('\n');
-      if (!$('private').value) $('private').value = (s.config.private || []).join('\n');
       if (!$('consolePort').value) $('consolePort').value = s.config.consolePort || 3100;
       const tts = s.config.tts || {};
       if (!$('ttsBaseUrl').value) $('ttsBaseUrl').value = tts.baseUrl || '';
@@ -904,6 +1471,7 @@ async function refreshStatus() {
     // 从「未启动」变成「已启动」时，把当前功能页的提示换掉
     if (botRunning && !NAV.some((g) => g.items.some((it) => it.id === active && it.self))) showConsolePage(active);
     void loadLive();
+  if (active === 'status' || active === 'overview') void loadOverview();
   } catch (e) {
     $('meta-gw').textContent = e.message;
   }
@@ -964,20 +1532,45 @@ async function loadLive() {
     ['上次说话', conv ? fmtAgo(conv.lastAiReplyAt) : '—']
   ];
   $('live-facts').innerHTML = facts.map(function (pair) {
-    return '<div><div class="hint" style="margin:0">' + pair[0] + '</div><div style="font-weight:600;margin-top:2px">' + pair[1] + '</div></div>';
+    return '<div class="stat"><div class="stat-label">' + pair[0] + '</div><div class="stat-value" style="font-size:15px">' + pair[1] + '</div></div>';
   }).join('');
 }
 
+let logWhich = 'bridge';
+let logLines = [];
+let logLevel = 'all';
+let logQuery = '';
+
+// 只做粗分级：日志是自己拼的字符串，认几个关键字就够区分「有事」和「没事」。
+function logLevelOf(line) {
+  if (/\b(error|err|fatal)\b|失败|异常|Error|✗|❌/i.test(line)) return 'err';
+  if (/\b(warn|warning)\b|警告|⚠|超时|重试/i.test(line)) return 'warn';
+  return 'info';
+}
+function renderLog() {
+  const box = $('log');
+  if (!box) return;
+  let lines = logLines;
+  if (logLevel === 'warn') lines = lines.filter((l) => logLevelOf(l) !== 'info');
+  if (logLevel === 'err') lines = lines.filter((l) => logLevelOf(l) === 'err');
+  const q = logQuery.trim().toLowerCase();
+  if (q) lines = lines.filter((l) => l.toLowerCase().includes(q));
+  if (!lines.length) {
+    box.innerHTML = '<div class="info" style="color:var(--muted)">' + (logLines.length ? '（没有符合筛选条件的日志）' : '（还没有日志）') + '</div>';
+    return;
+  }
+  box.innerHTML = lines
+    .map((l) => '<div class="' + logLevelOf(l) + '">' + scopeEsc(l) + '</div>')
+    .join('');
+  box.scrollTop = box.scrollHeight;
+}
 async function loadLogs() {
   try {
-    const data = await api('logs?which=' + logWhich + '&tail=140');
-    const box = $('log');
-    box.textContent = (data.lines || []).join('\n') || '（还没有日志）';
-    box.scrollTop = box.scrollHeight;
+    const data = await api('logs?which=' + logWhich + '&tail=200');
+    logLines = data.lines || [];
+    renderLog();
   } catch (e) { $('log').textContent = '读取失败：' + e.message; }
 }
-
-let logWhich = 'bridge';
 
 $('btn-gw-start').onclick = async () => {
   try { await api('snowluma/start', { method: 'POST' }); toast('toast1', '网关启动中，等几秒…'); } catch (e) { toast('toast1', e.message, true); }
@@ -1008,9 +1601,8 @@ async function saveAll(btnId, toastId) {
         ttsApiKey: $('ttsApiKey').value, ttsEnabled: $('ttsEnabled').checked,
         webSearchApiKey: $('webSearchApiKey').value, webSearchBaseURL: $('webSearchBaseURL').value,
         wsUrl: $('wsUrl').value, httpUrl: $('httpUrl').value, accessToken: $('accessToken').value,
-        groups: $('groups').value, private: $('private').value,
-        ownerQQ: $('ownerQQ').value, consolePort: $('consolePort').value,
-        consoleToken: $('consoleToken').value,
+        // 对话范围（群/好友/停用/备注/管理员/端口）只在「对话范围」页保存，
+        // 这里不提交——否则没进过那页时 scopeState 是空的，会把白名单清空。
         backend: $('backendDsh').checked ? 'dsh' : 'standalone',
         dshBaseUrl: $('dshBaseUrl').value
       })
@@ -1020,6 +1612,426 @@ async function saveAll(btnId, toastId) {
   } catch (e) { toast(toastId, e.message, true); }
   finally { btn.disabled = false; }
 }
+// ── 对话范围（列表式） ───────────────────────────────────
+// 启用/停用是两摞名单：启用的放 allow.groups / allow.private（bridge 只读这两个），
+// 关掉的挪进 allow.disabled.*，备注存在 allow.names。
+const scopeState = { groups: [], private: [], disabled: { groups: [], private: [] }, names: {} };
+const scopeFilter = { g: 'all', p: 'all' };
+const scopeSearch = { g: '', p: '' };
+
+function scopeEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+  ));
+}
+function scopeKey(kind) { return kind === 'g' ? 'groups' : 'private'; }
+function scopeRows(kind) {
+  const k = scopeKey(kind);
+  const on = Array.isArray(scopeState[k]) ? scopeState[k] : [];
+  const off = Array.isArray(scopeState.disabled?.[k]) ? scopeState.disabled[k] : [];
+  const rows = [];
+  for (const n of on) rows.push({ num: n, enabled: true });
+  for (const n of off) rows.push({ num: n, enabled: false });
+  return rows.sort((a, b) => a.num - b.num);
+}
+function scopeSnapshot() {
+  return {
+    groups: [...scopeState.groups],
+    private: [...scopeState.private],
+    disabledGroups: [...(scopeState.disabled?.groups ?? [])],
+    disabledPrivate: [...(scopeState.disabled?.private ?? [])],
+    allowNames: { ...scopeState.names }
+  };
+}
+function renderScope(kind) {
+  const list = $('sc-' + kind + '-list');
+  if (!list) return;
+  const f = scopeFilter[kind];
+  const q = scopeSearch[kind].trim();
+  let rows = scopeRows(kind);
+  if (f === 'on') rows = rows.filter((r) => r.enabled);
+  if (f === 'off') rows = rows.filter((r) => !r.enabled);
+  if (q) rows = rows.filter((r) => String(r.num).includes(q) || (scopeState.names?.[r.num] ?? '').includes(q));
+
+  const onG = scopeState.groups.length;
+  const onP = scopeState.private.length;
+  const offAll = (scopeState.disabled?.groups?.length ?? 0) + (scopeState.disabled?.private?.length ?? 0);
+  if ($('sc-g-count')) $('sc-g-count').innerHTML = onG + ' <small>启用 ' + onG + ' / 停用 ' + (scopeState.disabled?.groups?.length ?? 0) + '</small>';
+  if ($('sc-p-count')) $('sc-p-count').innerHTML = onP + ' <small>启用 ' + onP + ' / 停用 ' + (scopeState.disabled?.private?.length ?? 0) + '</small>';
+  if ($('sc-d-count')) $('sc-d-count').innerHTML = offAll + ' <small>保留配置但不回</small>';
+  if ($('sc-g-cnt')) $('sc-g-cnt').textContent = String(onG + (scopeState.disabled?.groups?.length ?? 0));
+  if ($('sc-p-cnt')) $('sc-p-cnt').textContent = String(onP + (scopeState.disabled?.private?.length ?? 0));
+
+  if (!rows.length) {
+    list.innerHTML = '<div class="empty"><div class="empty-icon">○</div><div class="empty-title">' +
+      (scopeRows(kind).length ? '没有匹配的号码' : '这里还是空的') + '</div><div>' +
+      (scopeRows(kind).length ? '换个关键词，或切到「全部」'
+        : (kind === 'g' ? '在上面输入群号，点「添加」；或用「从已有会话导入」' : '在上面输入 QQ 号，点「添加」')) +
+      '</div></div>';
+    return;
+  }
+  list.innerHTML = rows.map((r, i) => {
+    const note = scopeState.names?.[r.num] ?? '';
+    return '<div class="row' + (r.enabled ? '' : ' off') + '" data-num="' + r.num + '">' +
+      '<div class="row-index">' + (i + 1) + '</div>' +
+      '<div class="num">' + r.num + '</div>' +
+      '<input class="remark-text" value="' + scopeEsc(note) + '" placeholder="无备注" maxlength="40">' +
+      '<div class="badge ' + (r.enabled ? 'on' : 'off') + '"><i></i>' + (r.enabled ? '启用' : '停用') + '</div>' +
+      '<div class="row-actions">' +
+        '<button class="switch' + (r.enabled ? ' on' : '') + '" title="' + (r.enabled ? '点一下停用' : '点一下启用') + '"></button>' +
+        '<button class="btn mini danger" title="从名单里删掉">' + scopeTrash() + '删除</button>' +
+      '</div></div>';
+  }).join('');
+
+  for (const row of list.querySelectorAll('.row')) {
+    const num = Number(row.dataset.num);
+    row.querySelector('.switch').onclick = () => scopeMove(kind, num, !row.querySelector('.switch').classList.contains('on'));
+    row.querySelector('.remark-text').onchange = (ev) => {
+      const v = ev.target.value.trim();
+      if (!scopeState.names) scopeState.names = {};
+      if (v) scopeState.names[String(num)] = v.slice(0, 40);
+      else delete scopeState.names[String(num)];
+    };
+    row.querySelector('.btn.danger').onclick = async () => {
+      const note = scopeState.names?.[num] ? '（' + scopeState.names[num] + '）' : '';
+      const ok = await askConfirm({
+        title: '从名单里删掉 ' + num + '？',
+        body: '这个号码' + note + '会从' + (kind === 'g' ? '群聊' : '好友') + '白名单里彻底移除，备注也一起删。<br>以后要让机器人再理它，得重新添加。',
+        okText: '删掉'
+      });
+      if (ok) scopeRemove(kind, num);
+    };
+  }
+}
+
+function scopeTrash() {
+  return '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2"/><path d="M6 7l1 13h10l1-13"/></svg>';
+}
+
+function scopeMove(kind, num, enabled) {
+  const k = scopeKey(kind);
+  if (!scopeState.disabled) scopeState.disabled = { groups: [], private: [] };
+  const on = new Set(scopeState[k] ?? []);
+  const off = new Set(scopeState.disabled[k] ?? []);
+  if (enabled) { off.delete(num); on.add(num); } else { on.delete(num); off.add(num); }
+  scopeState[k] = [...on].sort((a, b) => a - b);
+  scopeState.disabled[k] = [...off].sort((a, b) => a - b);
+  renderScope(kind);
+  toast('toast-' + kind, (enabled ? '已启用 ' : '已关掉 ') + num + '（记得点保存）');
+}
+function scopeRemove(kind, num) {
+  const k = scopeKey(kind);
+  scopeState[k] = (scopeState[k] ?? []).filter((n) => n !== num);
+  scopeState.disabled[k] = (scopeState.disabled?.[k] ?? []).filter((n) => n !== num);
+  if (scopeState.names) delete scopeState.names[String(num)];
+  renderScope(kind);
+  toast('toast-' + kind, '已删掉 ' + num + '（记得点保存）');
+}
+function scopeAdd(kind) {
+  const raw = String($('sc-' + kind + '-input').value || '').trim();
+  const noteBox = $('sc-' + kind + '-note');
+  const note = String(noteBox?.value || '').trim();
+  if (!/^[0-9]{5,12}$/.test(raw)) {
+    toast('toast-' + kind, '号码不对：应该是 5–12 位数字', true);
+    return;
+  }
+  const num = Number(raw);
+  const k = scopeKey(kind);
+  const all = [...(scopeState[k] ?? []), ...(scopeState.disabled?.[k] ?? [])];
+  const had = all.includes(num);
+  if (!had) scopeState[k] = [...(scopeState[k] ?? []), num].sort((a, b) => a - b);
+  if (note) {
+    if (!scopeState.names) scopeState.names = {};
+    scopeState.names[String(num)] = note.slice(0, 40);
+  }
+  $('sc-' + kind + '-input').value = '';
+  if (noteBox) noteBox.value = '';
+  renderScope(kind);
+  toast('toast-' + kind, (had ? '已经在名单里了：' : '已添加 ') + num + (had ? '' : '（记得点保存）'));
+}
+async function loadScope() {
+  let cfg = null;
+  try {
+    const s = await api('status');
+    cfg = s.config;
+  } catch (e) {
+    toast('toast-g', '读配置失败：' + e.message, true);
+    return;
+  }
+  if (!cfg) return;
+  scopeState.groups = Array.isArray(cfg.groups) ? [...cfg.groups] : [];
+  scopeState.private = Array.isArray(cfg.private) ? [...cfg.private] : [];
+  scopeState.disabled = {
+    groups: Array.isArray(cfg.disabledGroups) ? [...cfg.disabledGroups] : [],
+    private: Array.isArray(cfg.disabledPrivate) ? [...cfg.disabledPrivate] : []
+  };
+  scopeState.names = cfg.names && typeof cfg.names === 'object' ? { ...cfg.names } : {};
+  if ($('sc-dn-groups')) $('sc-dn-groups').value = (cfg.denyGroups || []).join(', ');
+  if ($('sc-dn-private')) $('sc-dn-private').value = (cfg.denyPrivate || []).join(', ');
+  if ($('sc-owner')) $('sc-owner').textContent = cfg.ownerQQ ? String(cfg.ownerQQ) : '—';
+  if ($('ownerQQ')) $('ownerQQ').value = cfg.ownerQQ ? String(cfg.ownerQQ) : '';
+  if ($('consolePort')) $('consolePort').value = cfg.consolePort ? String(cfg.consolePort) : '';
+  renderScope('g');
+  renderScope('p');
+}
+// 从控制台已有的会话里把群/好友捞出来，省得手抄。
+async function scopeImport() {
+  const btn = $('sc-import');
+  if (btn) btn.disabled = true;
+  try {
+    const live = await api('live');
+    const keys = (live.conversations ?? []).map((x) => String(x.key ?? ''));
+    let added = 0;
+    for (const key of keys) {
+      const m = key.match(/^(group|private):([0-9]{5,12})$/);
+      if (!m) continue;
+      const kind = m[1] === 'group' ? 'g' : 'p';
+      const k = scopeKey(kind);
+      const num = Number(m[2]);
+      const all = [...(scopeState[k] ?? []), ...(scopeState.disabled?.[k] ?? [])];
+      if (all.includes(num)) continue;
+      scopeState[k] = [...(scopeState[k] ?? []), num].sort((a, b) => a - b);
+      added++;
+    }
+    renderScope('g');
+    renderScope('p');
+    toast('toast-g', added ? '导入 ' + added + ' 个（记得点保存）' : '没有新的会话可导入');
+  } catch (e) {
+    toast('toast-g', '导入失败：' + e.message, true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+async function saveScope(btnId, toastId) {
+  const btn = $(btnId);
+  if (btn) btn.disabled = true;
+  try {
+    const body = scopeSnapshot();
+    body.ownerQQ = $('ownerQQ').value;
+    body.consolePort = $('consolePort').value;
+    body.consoleToken = $('consoleToken').value;
+    body.denyGroups = $('sc-dn-groups').value;
+    body.denyPrivate = $('sc-dn-private').value;
+    await api('config', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    $('consoleToken').value = '';
+    toast(toastId, '已保存。重启机器人后生效。');
+    void refreshStatus();
+  } catch (e) {
+    toast(toastId, '保存失败：' + e.message, true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+for (const kind of ['g', 'p']) {
+  $('sc-' + kind + '-add').onclick = () => scopeAdd(kind);
+  $('sc-' + kind + '-input').onkeydown = (ev) => { if (ev.key === 'Enter') scopeAdd(kind); };
+  $('sc-' + kind + '-search').oninput = (ev) => { scopeSearch[kind] = ev.target.value; renderScope(kind); };
+  for (const chip of $('sc-' + kind + '-filter').querySelectorAll('.chip-filter')) {
+    chip.onclick = () => {
+      scopeFilter[kind] = chip.dataset.f;
+      for (const x of $('sc-' + kind + '-filter').querySelectorAll('.chip-filter')) x.classList.toggle('on', x === chip);
+      renderScope(kind);
+    };
+  }
+}
+if ($('tk-refresh')) $('tk-refresh').onclick = () => void loadUsage();
+  $('sc-import').onclick = () => void scopeImport();
+if ($('sc-dn-save')) $('sc-dn-save').onclick = () => void saveScope('sc-dn-save', 'sc-dn-toast');
+$('btn-save2').onclick = () => void saveScope('btn-save2', 'toast4');
+
+// ── 聊天行为（主动搭话 / 说话上限）──────────────────────────────
+function chatFill(pa, sp) {
+  const set = (id, v) => { const el = $(id); if (el) el.value = v == null ? '' : v; };
+  const chk = (id, v) => { const el = $(id); if (el) el.checked = !!v; };
+  chk('paEnabled', pa.enabled); chk('paGroup', pa.group); chk('paPrivate', pa.private);
+  set('paMin', Math.round((pa.checkIntervalMinMs || 0) / 60000));
+  set('paMax', Math.round((pa.checkIntervalMaxMs || 0) / 60000));
+  set('paIdle', Math.round((pa.idleThresholdMs || 0) / 60000));
+  set('paProb', pa.probability);
+  set('paMaxDay', pa.maxPerDay);
+  set('paNightFrom', pa.nightFrom || '');
+  set('paNightTo', pa.nightTo || '');
+  set('paWindow', pa.windowDays);
+  set('spPerMin', sp.maxSendPerMinute);
+  set('spPerHour', sp.maxSendPerHour);
+  set('spChars', sp.maxMessageChars);
+  set('spBurst', sp.burstMaxMessages);
+  set('spGapMin', (sp.burstIntervalMinMs || 0) / 1000);
+  set('spGapMax', (sp.burstIntervalMaxMs || 0) / 1000);
+}
+
+async function loadChat() {
+  try {
+    const r = await consoleFetch('/api/socialV2/config');
+    const c = (r && r.config) || {};
+    chatFill(c.proactive || {}, c.send || {});
+  } catch (e) {
+    toast('', '读不到聊天设置：' + (e && e.message ? e.message : e), true);
+  }
+}
+
+async function saveChatProactive() {
+  const n = (id, d) => { const v = Number($(id)?.value); return Number.isFinite(v) ? v : d; };
+  const body = {
+    proactive: {
+      enabled: !!$('paEnabled').checked,
+      group: !!$('paGroup').checked,
+      private: !!$('paPrivate').checked,
+      checkIntervalMinMs: Math.max(1, n('paMin', 30)) * 60000,
+      checkIntervalMaxMs: Math.max(1, n('paMax', 90)) * 60000,
+      idleThresholdMs: Math.max(1, n('paIdle', 15)) * 60000,
+      probability: Math.min(1, Math.max(0, n('paProb', 0.5))),
+      maxPerDay: Math.max(0, n('paMaxDay', 10)),
+      nightFrom: $('paNightFrom').value || '23:30',
+      nightTo: $('paNightTo').value || '07:00',
+      windowDays: Math.max(0, n('paWindow', 7)),
+    },
+  };
+  const btn = $('pa-save');
+  btn.disabled = true;
+  try {
+    await consoleFetch('/api/socialV2/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    toast('', '主动搭话已保存，立即生效');
+    await loadChat();
+  } catch (e) {
+    toast('', '保存失败：' + (e && e.message ? e.message : e), true);
+  } finally { btn.disabled = false; }
+}
+
+async function saveChatSend() {
+  const n = (id, d) => { const v = Number($(id)?.value); return Number.isFinite(v) ? v : d; };
+  const body = {
+    send: {
+      maxSendPerMinute: Math.max(1, n('spPerMin', 8)),
+      maxSendPerHour: Math.max(1, n('spPerHour', 60)),
+      maxMessageChars: Math.max(20, n('spChars', 500)),
+      burstMaxMessages: Math.max(1, n('spBurst', 8)),
+      burstIntervalMinMs: Math.max(0, n('spGapMin', 1) * 1000),
+      burstIntervalMaxMs: Math.max(0, n('spGapMax', 3) * 1000),
+    },
+  };
+  const btn = $('sp-save');
+  btn.disabled = true;
+  try {
+    await consoleFetch('/api/socialV2/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    toast('', '说话上限已保存，立即生效');
+    await loadChat();
+  } catch (e) {
+    toast('', '保存失败：' + (e && e.message ? e.message : e), true);
+  } finally { btn.disabled = false; }
+}
+
+const usageView = document.createElement('section');
+usageView.className = 'view pad';
+usageView.dataset.view = 'usage';
+usageView.innerHTML = head('TOKENS', '令牌用量', '只记 token 和缓存命中，不折算成钱——中转价一变钱就算不准，token 数是实的。') + `
+<div class="card">
+  <div class="card-head"><div class="card-title">累计用量</div><div class="spacer"></div>
+    <span class="count" id="tk-since">—</span>
+    <button class="btn mini" id="tk-refresh">刷新</button></div>
+  <div class="stats" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+    <div class="stat"><div class="stat-label">输入 · 未命中缓存</div><div class="stat-value" id="tk-miss">—</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:2px">按全价计的部分</div></div>
+    <div class="stat"><div class="stat-label">输入 · 缓存命中</div><div class="stat-value" id="tk-hit">—</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:2px">命中率 <span id="tk-rate">—</span></div></div>
+    <div class="stat"><div class="stat-label">输出</div><div class="stat-value" id="tk-out">—</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:2px">其中思考 <span id="tk-think">—</span></div></div>
+    <div class="stat"><div class="stat-label">合计 token</div><div class="stat-value" id="tk-total">—</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:2px">输入 + 输出</div></div>
+  </div>
+  <div class="stats" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+    <div class="stat"><div class="stat-label">回合数</div><div class="stat-value" id="tk-turns">—</div></div>
+    <div class="stat"><div class="stat-label">步数</div><div class="stat-value" id="tk-steps">—</div></div>
+    <div class="stat"><div class="stat-label">会话数</div><div class="stat-value" id="tk-convs">—</div></div>
+    <div class="stat"><div class="stat-label">每回合平均</div><div class="stat-value" id="tk-perturn">—</div></div>
+  </div>
+  <div class="note"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v.01M12 11v5"/></svg>
+    <span>只统计本机桥接记账的用量，不含 DSH 界面里其它会话。账本落盘在 <code>state/token-usage.jsonl</code>。</span></div>
+</div>
+<div class="card">
+  <div class="card-head"><div class="card-title">按会话</div><div class="spacer"></div>
+    <span class="count" id="tk-conv-count">0</span></div>
+  <div class="list" id="tk-list">
+    <div class="empty"><div class="empty-icon">○</div><div class="empty-title">还没有用量记录</div>
+      <div>等机器人跑过一两轮就会出现在这里。</div></div>
+  </div>
+</div>
+`;
+$('main').appendChild(usageView);
+
+// ── 令牌用量（只记 token 与缓存，不折算金额）──────────────────────────
+function tkNum(n) {
+  const v = Number(n) || 0;
+  if (v >= 1e8) return (v / 1e8).toFixed(2) + ' 亿';
+  if (v >= 1e4) return (v / 1e4).toFixed(1) + ' 万';
+  return String(Math.round(v));
+}
+function tkTime(ms) {
+  if (!ms) return '—';
+  const d = new Date(Number(ms));
+  const p = (n) => String(n).padStart(2, '0');
+  return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+function renderUsage(j) {
+  const t = j?.totals ?? {};
+  const b = t.buckets ?? {};
+  $('tk-miss').textContent = tkNum(b.cacheMiss);
+  $('tk-hit').textContent = tkNum(b.cacheHit);
+  $('tk-out').textContent = tkNum(b.output);
+  $('tk-think').textContent = tkNum(b.reasoning);
+  $('tk-total').textContent = tkNum(t.totalTokens);
+  $('tk-rate').textContent = ((Number(t.cacheHitRate) || 0) * 100).toFixed(1) + '%';
+  $('tk-turns').textContent = tkNum(t.turns);
+  $('tk-steps').textContent = tkNum(t.steps);
+  $('tk-convs').textContent = tkNum(t.conversations);
+  const perTurn = (Number(t.turns) || 0) > 0 ? (Number(t.totalTokens) || 0) / Number(t.turns) : 0;
+  $('tk-perturn').textContent = tkNum(perTurn);
+  $('tk-since').textContent = j?.generatedAt ? '更新于 ' + tkTime(j.generatedAt) : '—';
+
+  const list = Array.isArray(j?.conversations) ? j.conversations : [];
+  const box = $('tk-list');
+  const cnt = $('tk-conv-count');
+  if (cnt) cnt.textContent = String(list.length);
+  if (!list.length) {
+    box.innerHTML = '<div class="empty"><div class="empty-icon">○</div><div class="empty-title">还没有用量记录</div><div>等机器人跑过一两轮就会出现在这里。</div></div>';
+    return;
+  }
+  box.innerHTML = list.map(function (c) {
+    const cb = c.buckets ?? {};
+    const rate = (Number(cb.cacheHit) || 0) + (Number(cb.cacheMiss) || 0) > 0
+      ? ((Number(cb.cacheHit) || 0) / ((Number(cb.cacheHit) || 0) + (Number(cb.cacheMiss) || 0)) * 100).toFixed(1) + '%'
+      : '—';
+    const models = Array.isArray(c.models) && c.models.length ? c.models.map(function (m) {
+      return typeof m === 'string' ? m : (m.name || m.model || '');
+    }).filter(Boolean).join(' / ') : '—';
+    const name = String(c.key ?? '').replace(/^(group|private):/, function (_m, k) { return k === 'group' ? '群 ' : '私聊 '; });
+    return '<div class="row" style="grid-template-columns:1fr auto auto auto auto">'
+      + '<div><div class="num" style="font-family:inherit;font-size:13px">' + scopeEsc(name) + '</div>'
+      + '<div style="font-size:11px;color:var(--muted);margin-top:2px">' + scopeEsc(models) + ' · 最后 ' + tkTime(c.lastAt) + '</div></div>'
+      + '<div style="text-align:right"><div style="font-size:11px;color:var(--muted)">回合</div><div>' + tkNum(c.turns) + '</div></div>'
+      + '<div style="text-align:right"><div style="font-size:11px;color:var(--muted)">输入</div><div>' + tkNum((Number(cb.cacheMiss) || 0) + (Number(cb.cacheHit) || 0)) + '</div></div>'
+      + '<div style="text-align:right"><div style="font-size:11px;color:var(--muted)">输出</div><div>' + tkNum(cb.output) + '</div></div>'
+      + '<div style="text-align:right"><div style="font-size:11px;color:var(--muted)">命中率</div><div>' + rate + '</div></div>'
+      + '</div>';
+  }).join('');
+}
+async function loadUsage() {
+  const btn = $('tk-refresh');
+  if (btn) btn.disabled = true;
+  try {
+    const j = await consoleFetch('/api/tokens/summary');
+    renderUsage(j);
+  } catch (e) {
+    toast('tk-refresh', '读取用量失败：' + (e?.message ?? e), true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 // ── 角色包 ───────────────────────────────────────────────
 let rpState = { roles: [], current: '', defaults: {} };
 
@@ -1035,7 +2047,7 @@ function pickRole(name) {
       + (item.voiceId ? '，有音色' : '，**没写音色 → 这个角色不会发语音**') + '）'
     : '「' + name + '」还没有角色包：填完点保存就会生成；在此之前它不会发语音';
   $('rp-del').disabled = !item.hasPack;
-  for (const b of document.querySelectorAll('#rp-list button')) b.classList.toggle('primary', b.dataset.role === name);
+  for (const b of document.querySelectorAll('#rp-list .rl-item')) b.classList.toggle('active', b.dataset.role === name);
 }
 
 async function loadRolePacks() {
@@ -1043,10 +2055,12 @@ async function loadRolePacks() {
     const r = await api('rolepacks');
     rpState = { roles: r.roles || [], current: r.currentRole || '', defaults: r.configDefaults || {} };
     $('rp-list').innerHTML = rpState.roles.map(function (item) {
-      return '<button data-role="' + item.name + '" style="text-align:left">' + item.name
-        + ' <span class="hint" style="margin:0">' + (item.hasPack ? (item.dictionaryCount || 0) + ' 词' : '无包') + '</span></button>';
+      const tag = item.hasPack ? (item.voiceId ? (item.dictionaryCount || 0) + ' 词' : '无音色') : '无包';
+      return '<div class="rl-item" data-role="' + item.name + '">'
+        + '<span class="rl-name">' + item.name + '</span>'
+        + '<span class="rl-num">' + tag + '</span></div>';
     }).join('');
-    for (const b of document.querySelectorAll('#rp-list button')) b.onclick = function () { pickRole(b.dataset.role); };
+    for (const b of document.querySelectorAll('#rp-list .rl-item')) b.onclick = function () { pickRole(b.dataset.role); };
     const first = rpState.roles.some((x) => x.name === rpState.current) ? rpState.current : (rpState.roles[0] || {}).name;
     if (first) pickRole(first);
   } catch (e) {
@@ -1205,11 +2219,51 @@ $('btn-fetch-dsh').onclick = async () => {
   } finally { btn.disabled = false; }
 };
 
-$('btn-save').onclick = () => saveAll('btn-save', 'toast3');$('btn-save2').onclick = () => saveAll('btn-save2', 'toast4');
+$('btn-save').onclick = () => saveAll('btn-save', 'toast3');
+if ($('sc-g-save')) $('sc-g-save').onclick = () => void saveScope('sc-g-save', 'sc-g-toast');
+if ($('sc-p-save')) $('sc-p-save').onclick = () => void saveScope('sc-p-save', 'sc-p-toast');
+if ($('pa-save')) $('pa-save').onclick = () => void saveChatProactive();
+if ($('sp-save')) $('sp-save').onclick = () => void saveChatSend();
 $('btn-log-bridge').onclick = () => { logWhich = 'bridge'; loadLogs(); };
-$('btn-log-gw').onclick = () => { logWhich = 'snowluma'; loadLogs(); };
-$('btn-log-ui').onclick = () => { logWhich = 'ui'; loadLogs(); };
-$('btn-log-refresh').onclick = () => loadLogs();
+function setLogSrc(src) {
+  logWhich = src;
+  for (const b of document.querySelectorAll('#btn-log-bridge,#btn-log-gw,#btn-log-ui')) {
+    b.classList.toggle('on', b.dataset.src === src);
+  }
+  void loadLogs();
+}
+$('btn-log-bridge').onclick = () => setLogSrc('bridge');
+$('btn-log-gw').onclick = () => setLogSrc('snowluma');
+$('btn-log-ui').onclick = () => setLogSrc('ui');
+$('btn-log-refresh').onclick = () => void loadLogs();
+if ($('log-lv')) {
+  for (const chip of $('log-lv').querySelectorAll('.chip-filter')) {
+    chip.onclick = () => {
+      logLevel = chip.dataset.lv;
+      for (const x of $('log-lv').querySelectorAll('.chip-filter')) x.classList.toggle('on', x === chip);
+      renderLog();
+    };
+  }
+}
+if ($('log-q')) $('log-q').oninput = (ev) => { logQuery = ev.target.value; renderLog(); };
+if ($('btn-log-clear')) $('btn-log-clear').onclick = () => { logLines = []; renderLog(); };
+if ($('btn-gw-start-k')) $('btn-gw-start-k').onclick = () => { const b = $('btn-gw-start'); if (b) b.click(); };
+if ($('btn-bot-start-k')) $('btn-bot-start-k').onclick = () => { const b = $('btn-bot-start'); if (b) b.click(); };
+if ($('btn-bot-restart')) {
+  $('btn-bot-restart').onclick = async () => {
+    const b = $('btn-bot-restart');
+    if (b) b.disabled = true;
+    try {
+      await api('bot/stop', { method: 'POST' });
+      toast('toast1', '正在重启…');
+      await new Promise((r) => setTimeout(r, 2000));
+      await api('bot/start', { method: 'POST' });
+      toast('toast1', '已重启');
+    } catch (e) { toast('toast1', e.message, true); }
+    if (b) b.disabled = false;
+    setTimeout(refreshStatus, 1500);
+  };
+}
 
 // ── 静默时间 ────────────────────────────────────────────
 const WEEKDAY_NAMES = ['一', '二', '三', '四', '五', '六', '日'];
@@ -1382,7 +2436,7 @@ document.querySelectorAll('input[name="closeAction"]').forEach(function (el) {
 
 // ── QQ 启动 ─────────────────────────────────────────────
 // 网关是往 QQ 进程里注入 hook 的，所以这里只做两件事：记住 QQ 装在哪、需要时把它拉起来。
-// ── 个性页：问候语音 + 夜间催睡 ──────────────────────────
+// ── 个性页：问候语音 + 夜间催睡表情包 ──────────────────────────
 function pgStickerLabel(s) {
   const d = s.desc || s.localNote || s.md5 || s.id || '';
   return String(d).slice(0, 30);
@@ -1566,41 +2620,7 @@ loadLogs();
 setInterval(refreshStatus, 2500);
 setInterval(() => { if (active === 'status') loadLogs(); }, 4000);
 
-// ── 外观：跟随系统 / 浅色 / 深色 ──────────────────────────
-const THEME_ORDER = ['auto', 'light', 'dark'];
-const THEME_LABEL = { auto: '跟随系统', light: '浅色', dark: '深色' };
-let currentTheme = 'auto';
-
-function applyTheme(theme) {
-  currentTheme = THEME_ORDER.indexOf(theme) >= 0 ? theme : 'auto';
-  const root = document.documentElement;
-  if (currentTheme === 'auto') root.removeAttribute('data-theme');
-  else root.setAttribute('data-theme', currentTheme);
-  const lab = document.getElementById('theme-label');
-  if (lab) lab.textContent = THEME_LABEL[currentTheme];
-}
-
-async function loadTheme() {
-  try {
-    const r = await fetch('/panel/api/settings');
-    const s = await r.json();
-    applyTheme(s.theme);
-  } catch { applyTheme('auto'); }
-}
-
-document.getElementById('theme-btn').addEventListener('click', async () => {
-  const next = THEME_ORDER[(THEME_ORDER.indexOf(currentTheme) + 1) % THEME_ORDER.length];
-  applyTheme(next);
-  try {
-    await fetch('/panel/api/settings', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ theme: next })
-    });
-  } catch { /* 存不上也不影响本次显示 */ }
-});
-
-loadTheme();
+// ── 外观：固定深色（只保留一套配色，变量在 :root）──────────
 
 </script>
 </body>

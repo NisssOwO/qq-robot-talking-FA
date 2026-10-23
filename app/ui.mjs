@@ -59,7 +59,9 @@ const DEFAULTS = {
   snowluma: { wsUrl: 'ws://127.0.0.1:38001', httpUrl: 'http://127.0.0.1:38000', accessToken: '' },
   tts: { enabled: true, baseUrl: 'https://api.fish.audio', apiKey: '', model: 's2.1-pro-free' },
   webSearch: { apiKey: '', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: '' },
-  allow: { groups: [], private: [] },
+  // 白名单分启用/停用两摞：bridge 只读 groups/private（启用集合），
+  // 停用的号挪到 disabled 里，网关侧判断逻辑一行都不用改。
+  allow: { groups: [], private: [], disabled: { groups: [], private: [] }, names: {} },
   // QQ 本体：网关要注入到一个正在运行的 QQ 上，所以这里记住它装在哪、要不要顺手拉起来。
   qq: { path: '', autoLaunch: true },
   backend: 'standalone',
@@ -216,6 +218,42 @@ function pickQQPath() {
   });
 }
 
+// 「运行总览」要的今日计数：主动搭话用了几次、上限多少。数据在桥接的 state/social-v2.json。
+function readSocialToday(cfg) {
+  let proactive = 0;
+  let spoken = 0;
+  let conversations = 0;
+  const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  const dayOf = (ms) => new Date(Number(ms) + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  try {
+    const st = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'social-v2.json'), 'utf8'));
+    const list = st && st.conversations ? Object.values(st.conversations) : [];
+    for (const it of list) {
+      if (it && it.proactiveDay && String(it.proactiveDay) === today) {
+        proactive += Number(it.proactiveCountToday ?? 0) || 0;
+      }
+      // 「今天说了多少次话」直接数它自己发的消息。
+      // 之前用 token 账本的 turns，那个只在模型真的跑过回合时 +1、重启就清零，
+      // 所以页面上常年是 0——口径错了，不是数据没到。
+      const msgs = Array.isArray(it?.recentMessages) ? it.recentMessages : [];
+      let touched = false;
+      for (const m of msgs) {
+        const t = Number(m?.time ?? 0);
+        if (!t || dayOf(t) !== today) continue;
+        touched = true;
+        if (m.isSelf) spoken += 1;
+      }
+      if (touched) conversations += 1;
+    }
+  } catch { /* 没有状态文件就是 0 */ }
+  return {
+    proactive,
+    proactiveMax: Number(cfg?.socialV2?.proactive?.maxPerDay ?? 0) || 0,
+    spoken,
+    conversations
+  };
+}
+
 async function status() {
   const [webui, onebotHttp, onebotWs] = await Promise.all([
     probePort(WEBUI_PORT),
@@ -234,9 +272,11 @@ async function status() {
       onebotWs,
       // 没装网关（发布包按许可要求不带它）时界面要给出下载指引，而不是只说"启动失败"。
       installed: fs.existsSync(path.join(SNOWLUMA_DIR, 'index.mjs')),
-      dir: SNOWLUMA_DIR
+      dir: SNOWLUMA_DIR,
+      // 面板自己拉起来的进程才有 pid；外部已经在跑时是 null，界面上标「外部进程」。
+      pid: children.snowluma?.pid ?? null
     },
-    bot: { running: !!botAlive },
+    bot: { running: !!botAlive, pid: children.bot?.pid ?? null },
     // QQ 本体：网关靠注入它工作，所以面板要能把「装在哪、开没开」摆出来。
     qq: {
       running: qqProcs.length > 0,
@@ -254,7 +294,14 @@ async function status() {
           baseUrl: cfg.llm?.baseUrl ?? '',
           groups: cfg.allow?.groups ?? [],
           private: cfg.allow?.private ?? [],
+          disabledGroups: cfg.allow?.disabled?.groups ?? [],
+          disabledPrivate: cfg.allow?.disabled?.private ?? [],
+          names: cfg.allow?.names ?? {},
+          denyGroups: cfg.deny?.groups ?? [],
+          denyPrivate: cfg.deny?.private ?? [],
           consolePort: cfg.consolePort ?? 3100,
+          ownerQQ: cfg.ownerQQ ?? '',
+          today: readSocialToday(cfg),
           // 界面上要填的不止语言模型一家：语音合成、联网搜索、网关令牌都是密钥。
           tts: {
             enabled: cfg.tts?.enabled !== false,
@@ -558,10 +605,45 @@ function mergeConfig(base, input) {
 
   // 没提交这两个字段时保留原名单：否则一次局部保存就能把白名单清空。
   const prevAllow = next.allow ?? {};
+  // 列表页一次性提交完整四份数据；没提交的字段保留原值，避免局部保存清空白名单。
+  const numList = (v, prev) => {
+    if (v === undefined) return prev ?? [];
+    const arr = Array.isArray(v) ? v : parseList(v);
+    const out = [];
+    for (const x of arr) {
+      const k = Number(String(x).trim());
+      if (Number.isFinite(k) && k > 0 && !out.includes(k)) out.push(k);
+    }
+    return out;
+  };
+  const cleanNames = (v, prev) => {
+    if (v === undefined) return prev ?? {};
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return prev ?? {};
+    const out = {};
+    for (const [k, val] of Object.entries(v)) {
+      const key = String(k).trim();
+      const text = String(val ?? '').trim();
+      if (/^[0-9]{5,12}$/.test(key) && text) out[key] = text.slice(0, 40);
+    }
+    return out;
+  };
+  const prevDisabled = prevAllow.disabled ?? {};
   next.allow = {
     ...prevAllow,
-    groups: input.groups === undefined ? (prevAllow.groups ?? []) : parseList(input.groups),
-    private: input.private === undefined ? (prevAllow.private ?? []) : parseList(input.private)
+    groups: numList(input.groups, prevAllow.groups),
+    private: numList(input.private, prevAllow.private),
+    disabled: {
+      groups: numList(input.disabledGroups, prevDisabled.groups),
+      private: numList(input.disabledPrivate, prevDisabled.private)
+    },
+    names: cleanNames(input.allowNames, prevAllow.names)
+  };
+  // 拒绝名单：单独一层 deny，命中就一句话都不回（比「不启用」更硬）。
+  const prevDeny = next.deny ?? {};
+  next.deny = {
+    ...prevDeny,
+    groups: numList(input.denyGroups, prevDeny.groups),
+    private: numList(input.denyPrivate, prevDeny.private)
   };
   if (String(input.ownerQQ ?? '').trim()) next.ownerQQ = Number(String(input.ownerQQ).trim()) || 0;
   // QQ 本体：路径留空表示没配（首次启动会去探测），autoLaunch 缺省开。
@@ -665,6 +747,15 @@ const server = http.createServer(async (req, res) => {
       }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       return res.end(fs.readFileSync(CONSOLE_PATH));
+    }
+
+    // 面板与桥接控制台共用的静态资源：主题变量、公共函数。
+    if (req.method === 'GET' && (url.pathname === '/theme.css' || url.pathname === '/shared.js')) {
+      const file = path.join(APP_DIR, url.pathname.slice(1));
+      if (!fs.existsSync(file)) { res.writeHead(404); return res.end(''); }
+      const type = url.pathname.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8';
+      res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store' });
+      return res.end(fs.readFileSync(file));
     }
 
     // ── 面板自己的接口（进程管理 / 模型配置）───────────────
@@ -861,6 +952,10 @@ function proxyConsole(req, res) {
   const entry = consoleEntry(readConfig());
   const headers = { ...req.headers, host: `127.0.0.1:${entry.port}` };
   delete headers.connection;
+  // 浏览器带的 Origin/Referer 是面板自己的地址，桥接那边会当成跨站请求挡掉。
+  // 这里本来就是本机同源代理，去掉再转发。
+  delete headers.origin;
+  delete headers.referer;
   if (entry.token) headers['x-console-token'] = entry.token;
   const up = http.request(
     { host: '127.0.0.1', port: entry.port, path: req.url, method: req.method, headers },

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>QQ 桥接控制台</title>
+<script src="/shared.js"></script>
 <script>
 // 主题引导：须在样式表之前执行，避免首屏闪一下浅色。
 (function () {
@@ -2724,6 +2725,15 @@ button:active:not(:disabled) {
   }
 })();
 
+// 毫秒差 → 「刚刚 / 3 分钟 / 2 小时」。「多久以前」在两处用，别让它们各自实现。
+function fmtAgoMs(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n < 0) return "—";
+  if (n < 60000) return Math.max(1, Math.round(n / 1000)) + " 秒";
+  if (n < 3600000) return Math.round(n / 60000) + " 分钟";
+  if (n < 86400000) return Math.round(n / 3600000) + " 小时";
+  return Math.round(n / 86400000) + " 天";
+}
 async function api(path, method, body, _retried = 0) {
   const headers = body ? {'content-type':'application/json'} : {};
   const token = localStorage.getItem('consoleToken');
@@ -2744,18 +2754,7 @@ async function api(path, method, body, _retried = 0) {
   }
   return res.json();
 }
-function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 // 上游静默时长的人话渲染：只用于 SnowLuma 健康提示（秒 / 分钟 / 小时）。
-function fmtAgoMs(ms) {
-  if (ms === null || ms === undefined || ms === '') return '未知';
-  const n = Number(ms);
-  if (!Number.isFinite(n) || n < 0) return '未知';
-  if (n < 1000) return '刚刚';
-  if (n < 60_000) return Math.round(n / 1000) + ' 秒';
-  if (n < 3_600_000) return Math.round(n / 60_000) + ' 分钟';
-  if (n < 86_400_000) return Math.round(n / 3_600_000) + ' 小时';
-  return Math.round(n / 86_400_000) + ' 天';
-}
 // SnowLuma 上游健康：控制台是唯一的可视化出口（桥接侧只有日志）。
 // 旧版桥接的 /api/status 没有 snowluma 字段，一律当「未知」处理，不抛错。
 function renderSnowlumaHealth(sl) {
@@ -2799,8 +2798,20 @@ function renderSnowlumaHealth(sl) {
 }
 
 async function refresh() {
+  // 先把数据拿到手：只有这一步失败才算「连不上桥接」。
+  let s;
   try {
-    const s = await api('/api/status');
+    s = await api('/api/status');
+  } catch (e) {
+    document.getElementById('statusText').textContent = '连接中断 · 请检查桥接服务';
+    setConnectionError(e);
+    return;
+  }
+  document.getElementById('statusText').textContent = '已连接 · ' + (s.mode === 'reserved' ? '一代仿真' : s.mode === 'reserved2' ? '二代仿真' : s.mode === 'closed-agent' ? '封闭 Agent' : '聊天模式');
+  document.getElementById('statusText').className = 'status-badge';
+  document.getElementById('connectionAlert').hidden = true;
+  // 再更新界面：这里出错是渲染问题，不该冒充成「连不上」。
+  try {
     document.querySelectorAll('#modeRow button').forEach(b => (b.classList.toggle('active', b.dataset.mode === s.mode), b.setAttribute('aria-pressed', String(b.dataset.mode === s.mode))));
     document.getElementById('roleText').textContent = s.role || '无';
     document.getElementById('roleModeText').textContent = s.roleMode === 'silent' ? '静默' : '正常';
@@ -2809,7 +2820,9 @@ async function refresh() {
     document.getElementById('activity').textContent = s.activity || '（空）';
     const presetSel = document.getElementById('closedPreset');
     if (presetSel && document.activeElement !== presetSel) presetSel.value = s.closedAgentPreset || '';
-  } catch (e) { document.getElementById('statusText').textContent = '连接中断 · 请检查桥接服务'; setConnectionError(e); }
+  } catch (e) {
+    console.warn('[console] 状态渲染失败：', e);
+  }
 }
 
 async function refreshPresets() {
@@ -4846,7 +4859,7 @@ function setConnectionError(error) {
   document.getElementById('metricSnowlumaHint').textContent = '当前状态可能已过期';
   document.getElementById('snowlumaWarn').style.display = 'none';
   const alert = document.getElementById('connectionAlert');
-  alert.textContent = error.message === '未授权' ? '访问令牌无效或已取消输入。请使用启动日志中的控制台链接重新打开。' : '无法连接桥接服务，当前显示的是上次同步结果。请检查桥接是否运行，再点击右上角刷新。';
+  alert.textContent = error.message === '未授权' ? '访问令牌无效或已取消输入。请使用启动日志中的控制台链接重新打开。' : ('连不上桥接：' + (error && error.message ? error.message : String(error)) + '（当前显示的是上次同步结果）');
   alert.hidden = false;
 }
 document.getElementById('refreshConsole').addEventListener('click', async function () {
