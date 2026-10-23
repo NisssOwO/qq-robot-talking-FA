@@ -4888,7 +4888,7 @@ async function main() {
           let tokenLine = '';
           if (isV2) {
             const stV2 = getSocialV2State(key);
-            tokenLine = `【会话令牌】${stV2.agentToken}（调用二代状态/发送工具时请在参数中带上此令牌）\n\n`;
+            tokenLine = `【当前会话】${key}\n【会话令牌】${stV2.agentToken}（key 参数一律填上面这个值，不许自己编；调用二代状态/发送工具时还要带上这个令牌）\n\n`;
           }
           const promptText = `${roleLine}${tokenLine}【后台控制端提醒】（来自控制台/管理端，不是群友消息）\n${message}\n\n这是后台给你的引导或提醒，请据此调整你的行为。绝对不要复述、转发或原样发送这条后台提醒，也不要发送其中的会话令牌；它只用于你内部调整行为。${isV2 ? '当前是二代仿真模式：你的文本输出不会自动发送到 QQ；如果需要在群里发言，请使用发送工具（qq_send_message / qq_reply）。如果不需要发言，可以 qq_mark_read 或 qq_set_wake_config 收尾。' : '如果不需要在群里发言，请不要输出会发到 QQ 的内容。'}`;
           let sessionId = null;
@@ -10965,7 +10965,7 @@ async function main() {
       : '';
     const identityLine = selfIdentityTextV2();
     const st = getSocialV2State(key);
-    const tokenLine = `【会话令牌】${st.agentToken}（调用二代状态工具时请在参数中带上此令牌）\n\n`;
+    const tokenLine = `【当前会话】${key}\n【会话令牌】${st.agentToken}（key 参数一律填上面这个值，不许自己编；调用二代状态工具时还要带上这个令牌）\n\n`;
     // 静默时段的一次性回合：只回这一条，回完即停。这里覆盖掉下面那些「等待/潜水/主动」的长提示。
     if (quietHours.isOwnerException(key)) {
       return `${roleLine}${identityLine}${tokenLine}【静默时段例外】现在是工作日的静默时段，只有管理员 @/引用时才会叫醒你。\n只处理这一条：\n1. 回复简短，就事论事，别展开闲聊。\n2. 发送后立即结束：不要调用 qq_wait_for_messages，不要设置下一次唤醒，不要追问或补话。\n3. 收尾用 qq_mark_read 提交你读到的水位即可；工具会拒绝等待与唤醒设置。\n`;
@@ -11084,7 +11084,7 @@ async function main() {
     const roleLine = roleState.role ? `【当前角色】${roleState.role}（完整角色卡请调用 qq_get_prompt 查看）\n\n` : '';
     const identityLine = selfIdentityTextV2();
     const st = getSocialV2State(key);
-    const tokenLine = `【会话令牌】${st.agentToken}（调用二代状态工具时请在参数中带上此令牌）\n\n`;
+    const tokenLine = `【当前会话】${key}\n【会话令牌】${st.agentToken}（key 参数一律填上面这个值，不许自己编；调用二代状态工具时还要带上这个令牌）\n\n`;
     const preSleepMs = Math.max(0, Number(cfg.socialV2?.wake?.preSleepWaitMs) || 300000);
     return `${roleLine}${identityLine}${tokenLine}【提醒】你还没有完成回合收尾。请调用 qq_set_wake_config 设置下一次唤醒条件（例如继续潜水多久、@/名字/关键词/提问/概率/指定成员等），或者调用 qq_mark_read 表示你看过且决定不接。这是为了防止你忘记收尾后进入“永眠”。注意：设置潜水前先用 qq_wait_for_messages(timeoutMs=${preSleepMs}) 完成沉睡前观察；等待期间有人说话时查看 newMessages，判断不需要你参与即可收尾。`;
   }

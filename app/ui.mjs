@@ -798,6 +798,18 @@ const server = http.createServer(async (req, res) => {
           return json(res, 502, { ok: false, error: `拉取模型列表失败：${msg}` });
         }
       }
+      if (sub === 'tts-models' && (req.method === 'GET' || req.method === 'POST')) {
+        const ttsCfg = (readConfig() ?? {}).tts ?? {};
+        const engines = ['s2.1-pro-free', 's2-pro', 'speech-1.6', 'speech-1.5', 's1'];
+        return json(res, 200, {
+          ok: true,
+          models: engines,
+          count: engines.length,
+          current: String(ttsCfg.model ?? '').trim(),
+          hasKey: !!String(ttsCfg.apiKey ?? '').trim() || !!String(process.env.FISH_API_KEY ?? '').trim(),
+          note: 'Fish Audio 引擎版本；音色（voiceId）在「角色包」页配。'
+        });
+      }
       if (sub === 'dsh/endpoint' && req.method === 'GET') {
         // 「检测 DSH 端口」：DSH 桌面端每次启动会换一个随机端口，而桥接的地址写在 config.json 里。
         // 这里现场扫一遍（netstat + HTTP 指纹认得 DSH 的 401 / __DSH_BOOT__），把结果交给界面填。

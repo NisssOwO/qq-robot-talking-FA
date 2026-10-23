@@ -182,6 +182,11 @@
   .confirm-body code { font-family:var(--mono); font-size:12px; background:var(--surface-subtle); padding:1px 5px; border-radius:5px; }
   .confirm-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; }
   .confirm-actions button { min-width:84px; }
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .chip{padding:4px 10px;border:1px solid var(--card-border);border-radius:999px;background:var(--surface);
+    color:var(--text-secondary);font-size:12.5px;cursor:pointer;user-select:none;line-height:1.7}
+  .chip:hover{border-color:var(--accent);color:var(--accent)}
+  .chip.on{border-color:var(--accent);color:var(--accent);background:rgba(77,107,254,.08)}
 </style>
 </head>
 <body>
@@ -347,13 +352,16 @@ modelView.innerHTML = head('MODEL / KEYS', '模型与密钥', '机器人要调�
     <h2>语言模型</h2>
     <div class="two">
       <div><label>接口地址</label><input id="baseUrl" placeholder="https://api.deepseek.com/v1"></div>
-      <div><label>模型名</label><input id="model" placeholder="deepseek-chat" list="model-list"><datalist id="model-list"></datalist></div>
+      <div><label>模型名</label><input id="model" placeholder="deepseek-chat" autocomplete="off" spellcheck="false"></div>
     </div>
     <label>API Key <span class="hint" id="key-mask" style="display:inline"></span></label>
     <input id="apiKey" type="password" placeholder="留空表示不修改" autocomplete="off">
     <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
       <button id="btn-fetch-models">获取可用模型</button>
       <span class="hint" id="models-hint" style="margin:0">用上面填的地址和 key 去问接口</span>
+    </div>
+    <div id="model-chips" class="chips"></div>
+    <div style="display:none" data-old="models-tail">
     </div>
     <div class="hint">OpenAI 兼容接口都行：DeepSeek 官方、中转站、本地 vLLM。</div>
   </div>
@@ -379,7 +387,12 @@ modelView.innerHTML = head('MODEL / KEYS', '模型与密钥', '机器人要调�
     <h2>语音合成</h2>
     <div class="two">
       <div><label>接口地址</label><input id="ttsBaseUrl" placeholder="https://api.fish.audio"></div>
-      <div><label>模型名</label><input id="ttsModel" placeholder="s2.1-pro-free"></div>
+      <div><label>模型名</label><input id="ttsModel" placeholder="s2.1-pro-free" autocomplete="off" spellcheck="false">
+        <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+          <button id="btn-fetch-tts-models" type="button">获取可用模型</button>
+          <span class="hint" id="tts-models-hint" style="margin:0">Fish Audio 的引擎版本</span>
+        </div>
+        <div id="tts-model-chips" class="chips"></div></div>
     </div>
     <label>API Key <span class="hint" id="tts-mask" style="display:inline"></span></label>
     <input id="ttsApiKey" type="password" placeholder="留空表示不修改" autocomplete="off">
@@ -1094,6 +1107,43 @@ $('rp-del').onclick = async function () {
   } catch (e) { $('rp-toast').textContent = '删除失败：' + e.message; }
 };
 
+// 把拿到的模型渲染成一排可点的标签：比 datalist 可控——datalist 会把建议值粘在输入框上，
+// 用户想改成列表外的名字时会被自动填充顶掉（实测反馈「出现自动填充，之后改不了」）。
+function renderModelChips(containerId, inputId, list) {
+  const box = $(containerId);
+  const input = $(inputId);
+  if (!box) return;
+  box.innerHTML = (list || []).map(function (m) {
+    const v = String(m);
+    const on = input && input.value === v ? ' on' : '';
+    return '<span class="chip' + on + '" data-v="' + v.replace(/"/g, '&quot;') + '">' + v.replace(/</g, '&lt;') + '</span>';
+  }).join('');
+  if (box.dataset.bound === '1') return;
+  box.dataset.bound = '1';
+  box.addEventListener('click', function (ev) {
+    const chip = ev.target.closest('.chip');
+    if (!chip || !input) return;
+    input.value = chip.dataset.v || '';
+    for (const c of box.querySelectorAll('.chip')) c.classList.toggle('on', c === chip);
+  });
+}
+
+$('btn-fetch-tts-models').onclick = async () => {
+  const btn = $('btn-fetch-tts-models');
+  btn.disabled = true;
+  $('tts-models-hint').textContent = '正在读取…';
+  try {
+    const r = await api('tts-models');
+    const list = r.models || [];
+    renderModelChips('tts-model-chips', 'ttsModel', list);
+    $('tts-models-hint').textContent = r.hasKey
+      ? list.length + ' 个引擎版本，点一下填进去（' + (r.note || '') + '）'
+      : '还没填语音合成的 API Key，先填 Key 再点这里。';
+  } catch (e) {
+    $('tts-models-hint').textContent = '失败：' + e.message;
+  } finally { btn.disabled = false; }
+};
+
 $('btn-fetch-models').onclick = async () => {
   const btn = $('btn-fetch-models');
   btn.disabled = true;
@@ -1105,9 +1155,7 @@ $('btn-fetch-models').onclick = async () => {
       body: JSON.stringify({ baseUrl: $('baseUrl').value, apiKey: $('apiKey').value })
     });
     const list = r.models || [];
-    $('model-list').innerHTML = list.map(function (m) {
-      return '<option value="' + String(m).replace(/"/g, '&quot;') + '"></option>';
-    }).join('');
+    renderModelChips('model-chips', 'model', list);
     $('models-hint').textContent = list.length
       ? list.length + ' 个模型可以在「模型名」里选（' + r.ms + 'ms）'
       : '接口返回了空列表';
