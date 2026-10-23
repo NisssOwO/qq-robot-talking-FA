@@ -247,16 +247,6 @@
       "idleThresholdMs": 900000,
       "probability": 0.3
     },
-    "nightSticker": {
-      "enabled": false,
-      "at": "23:00",
-      "windowMin": 20,
-      "stickerId": "",
-      "text": {
-        "ja": "",
-        "zh": ""
-      }
-    },
     "feedback": {
       "maxLength": 500,
       "notifyOwnerOnError": false
@@ -276,6 +266,17 @@
       "maxBytes": 8388608,
       "maxPixels": 64000000,
       "maxCount": 5
+    },
+    "greetingVoice": false,
+    "nightSticker": {
+      "enabled": false,
+      "at": "23:00",
+      "windowMin": 20,
+      "stickerId": "",
+      "text": {
+        "ja": "",
+        "zh": ""
+      }
     }
   },
   "webSearch": {

@@ -228,6 +228,7 @@ const NAV = [
     { id: 'persona',  label: '人格与角色', ico: '◈' },
     { id: 'rolepack', label: '角色包', ico: '⧉', self: true },
     { id: 'quiet',    label: '静默时间', ico: '◔', self: true },
+    { id: 'personalize', label: '个性', ico: '✦', self: true },
     { id: 'social-v2', label: '二代仿真', ico: '◆' },
     { id: 'social-v1', label: '一代仿真', ico: '◇' },
     { id: 'slang',    label: '黑话词库', ico: '▤' }
@@ -572,6 +573,66 @@ quietView.innerHTML = head('QUIET HOURS', '静默时间', '到了静默时段，
 </div>`;
 $('main').appendChild(quietView);
 
+// ── 自建页：个性 ────────────────────────────────────
+const personalizeView = document.createElement('section');
+personalizeView.className = 'view pad';
+personalizeView.dataset.view = 'personalize';
+personalizeView.innerHTML = head('PERSONALITY', '个性', '把「机器人平时怎么说话」做成开关。改完立即生效，不用重启网关或机器人。') + `
+<div class="grid">
+  <div class="card span2">
+    <h2>问候发语音</h2>
+    <label class="choice" style="margin-top:10px">
+      <input type="checkbox" id="pg-greeting">
+      <span>说「早安 / 晚安 / 在吗」这类问候时，优先用语音说出来</span>
+    </label>
+    <div class="hint" style="margin-top:10px">打开后，问候一律走 <code>qq_tts_say</code>：先发语音，再自动补一条「日语 + 中文字幕」。合成失败（没配 key、限流、超时、文本太长）会自动退回纯文字，不会发不出去。</div>
+    <div class="hint" style="margin-top:4px">声音用的是当前角色的角色包音色；角色包里没写音色的角色不会发声，只会打字。</div>
+  </div>
+
+  <div class="card span2">
+    <h2>夜间催睡</h2>
+    <label class="choice" style="margin-top:10px">
+      <input type="checkbox" id="pg-night">
+      <span>每天到点，自动发一句「该睡了」+ 一个表情包</span>
+    </label>
+    <div class="hint" style="margin-top:10px">到点由程序直接发，不经过模型，所以模型在潜水也不会漏。静默时段、暂停、非二代模式下不发；每个群每天只发一次，也不占主动搭话的次数。</div>
+    <div class="two" style="margin-top:14px">
+      <div>
+        <label>每天几点发</label>
+        <input type="time" id="pg-at">
+      </div>
+      <div>
+        <label>补发窗口（分钟）</label>
+        <input type="number" id="pg-window" min="1" max="180" step="1" placeholder="20">
+      </div>
+    </div>
+    <div style="margin-top:12px">
+      <label>配哪个表情</label>
+      <select id="pg-sticker" style="width:100%;padding:9px 11px;border:1px solid var(--card-border);border-radius:9px;background:var(--surface);color:var(--text);font:inherit">
+        <option value="">（不发表情，只发文字）</option>
+      </select>
+      <div class="hint" style="margin-top:6px">列表来自这个 QQ 号收藏的表情；想加新的，先在 QQ 里收藏。</div>
+    </div>
+    <div class="two" style="margin-top:12px">
+      <div>
+        <label>日语台词</label>
+        <input id="pg-ja" placeholder="あら～、もう23時ですよ～">
+      </div>
+      <div>
+        <label>中文字幕</label>
+        <input id="pg-zh" placeholder="哎呀～已经23点啦～">
+      </div>
+    </div>
+    <div class="hint" style="margin-top:8px">两段都留空就只发表情；只填中文就只发中文。</div>
+    <div style="margin-top:18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <button class="primary" id="pg-save">保存</button>
+      <span class="hint">保存立即生效。</span>
+    </div>
+    <div class="toast" id="pg-toast"></div>
+  </div>
+</div>`;
+$('main').appendChild(personalizeView);
+
 // ── 自建页：角色包 ──────────────────────────────────────
 const rolepackView = document.createElement('section');
 rolepackView.className = 'view pad';
@@ -618,6 +679,7 @@ function go(id) {
     if (id === 'quiet') void loadQuiet();
     if (id === 'close') void loadCloseSetting();
     if (id === 'qq') void loadQQ();
+    if (id === 'personalize') void loadPersonalize();
     return;
   }
   showConsolePage(id);
@@ -1250,6 +1312,70 @@ document.querySelectorAll('input[name="closeAction"]').forEach(function (el) {
 
 // ── QQ 启动 ─────────────────────────────────────────────
 // 网关是往 QQ 进程里注入 hook 的，所以这里只做两件事：记住 QQ 装在哪、需要时把它拉起来。
+// ── 个性页：问候语音 + 夜间催睡 ──────────────────────────
+function pgStickerLabel(s) {
+  const d = s.desc || s.localNote || s.md5 || s.id || '';
+  return String(d).slice(0, 30);
+}
+async function loadPgStickers(selected) {
+  const sel = $('pg-sticker');
+  if (!sel) return;
+  try {
+    const r = await consoleFetch('/api/stickers?count=100');
+    const list = Array.isArray(r.stickers) ? r.stickers : (Array.isArray(r.entries) ? r.entries : []);
+    sel.innerHTML = '<option value="">（不发表情，只发文字）</option>' + list.map(function (s) {
+      const id = String(s.id || s.resId || s.md5 || s.url || '');
+      const label = pgStickerLabel(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+      return '<option value="' + id.replace(/"/g, '&quot;') + '">' + label + '</option>';
+    }).join('');
+    if (selected) sel.value = selected;
+  } catch (e) { /* 取不到就只留空选项，不影响保存 */ }
+}
+async function loadPersonalize() {
+  try {
+    const r = await consoleFetch('/api/socialV2/config');
+    const v2 = r.config || {};
+    if ($('pg-greeting')) $('pg-greeting').checked = v2.greetingVoice === true;
+    const ns = v2.nightSticker || {};
+    if ($('pg-night')) $('pg-night').checked = ns.enabled === true;
+    if ($('pg-at')) $('pg-at').value = ns.at || '23:00';
+    if ($('pg-window')) $('pg-window').value = String(ns.windowMin || 20);
+    if ($('pg-ja')) $('pg-ja').value = ns.text && ns.text.ja ? ns.text.ja : '';
+    if ($('pg-zh')) $('pg-zh').value = ns.text && ns.text.zh ? ns.text.zh : '';
+    await loadPgStickers(ns.stickerId || '');
+  } catch (e) {
+    toast('pg-toast', '读取失败：' + e.message, true);
+  }
+}
+async function savePersonalize() {
+  const btn = $('pg-save');
+  if (btn) btn.disabled = true;
+  try {
+    const payload = {
+      greetingVoice: $('pg-greeting').checked,
+      nightSticker: {
+        enabled: $('pg-night').checked,
+        at: ($('pg-at').value || '23:00').trim(),
+        windowMin: Math.max(1, Math.min(180, Number($('pg-window').value) || 20)),
+        stickerId: $('pg-sticker').value || '',
+        text: { ja: $('pg-ja').value.trim(), zh: $('pg-zh').value.trim() }
+      }
+    };
+    await consoleFetch('/api/socialV2/config', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    toast('pg-toast', '已保存，立即生效');
+    await loadPersonalize();
+  } catch (e) {
+    toast('pg-toast', '保存失败：' + e.message, true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+if ($('pg-save')) $('pg-save').onclick = savePersonalize;
+
 function applyQQ(q) {
   q = q || {};
   const running = !!q.running;

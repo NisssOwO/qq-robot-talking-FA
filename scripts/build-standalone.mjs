@@ -59,6 +59,57 @@ function copyDir(from, to, { skip = [], filter = null } = {}) {
   return n;
 }
 
+// 发布内容净化：把作者本机特有的「行为偏好」从输出里去掉，让发布包保持通用
+// （不把某个人的私人设定当成所有使用者的默认）。只改 OUT 里的副本，绝不修改本机源码。
+function sanitizeReleaseOutput() {
+  const hits = [];
+
+  // 1) 「问候一律发语音」现在是 socialV2.greetingVoice 开关（发布版默认 false），
+  //    代码本身变成通用功能，不能再删那行——删了会留下一个空的 if 块。这里什么都不做。
+
+  // 2) preset / 提示词里的第 19 条，并把后面的编号顺延
+  for (const file of [
+    path.join(OUT, 'dsh', 'agent-presets', 'qq-chat-v2', 'agent.cordis.yml'),
+    path.join(OUT, 'resources', 'prompts', 'qq-chat-v2.md'),
+  ]) {
+    if (!fs.existsSync(file)) continue;
+    const before = fs.readFileSync(file, 'utf8');
+    let text = before.replace(/[ \t]*19\. 【问候一律发语音】[\s\S]*?(?=20\. 【同一话题只回一次】)/, '');
+    text = text
+      .replace(/([ \t]*)20\. 【同一话题只回一次】/, (_m, pad) => pad + '19. 【同一话题只回一次】')
+      .replace(/([ \t]*)21\. 【被叫就直接回】/, (_m, pad) => pad + '20. 【被叫就直接回】');
+    if (text !== before) {
+      fs.writeFileSync(file, text, 'utf8');
+      hits.push(`${path.relative(OUT, file)} 去掉第 19 条`);
+    }
+  }
+
+  // 3) 角色卡里的同一条
+  const rolePath = path.join(OUT, 'roles', '七草はづき.md');
+  if (fs.existsSync(rolePath)) {
+    const src = fs.readFileSync(rolePath, 'utf8');
+    const next = src.replace(/[ \t]*- \*\*问候一律发语音\*\*[^\n]*\r?\n/g, '');
+    if (next !== src) {
+      fs.writeFileSync(rolePath, next, 'utf8');
+      hits.push('roles/七草はづき.md 去掉问候语音规则');
+    }
+  }
+
+  // 4) 配置模板里的催睡示例文案清空（保留字段，不写具体句子）
+  const cfgPath = path.join(OUT, 'config.json');
+  if (fs.existsSync(cfgPath)) {
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    const ns = cfg?.socialV2?.nightSticker;
+    if (ns && (ns.text?.ja || ns.text?.zh)) {
+      ns.text = { ja: '', zh: '' };
+      fs.writeFileSync(cfgPath, `${JSON.stringify(cfg, null, 2)}\n`, 'utf8');
+      hits.push('config.json 催睡示例文案清空');
+    }
+  }
+
+  report.push(`净化：${hits.length ? hits.join('；') : '无需处理'}`);
+}
+
 const report = [];
 function step(label, fn) {
   const n = fn();
@@ -174,6 +225,9 @@ const standaloneCfg = {
 };
 fs.writeFileSync(path.join(OUT, 'config.json'), `${JSON.stringify(standaloneCfg, null, 2)}\n`, 'utf8');
 report.push('config.json: 模板（backend=standalone，llm.apiKey 留空）');
+
+// 5b) 净化：作者本机的个性化行为规则不进发布内容（只改输出，不动源码）
+step('净化个性化内容', () => sanitizeReleaseOutput());
 
 // 6) state 目录（空）
 fs.mkdirSync(path.join(OUT, 'state'), { recursive: true });
