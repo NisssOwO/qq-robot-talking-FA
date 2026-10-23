@@ -123,7 +123,9 @@ function requestViaProxy({ proxyUrl, url, headers, body, timeoutMs }) {
         finish(new TtsError('network', `代理拒绝 CONNECT（${statusLine.slice(0, 60)}）`));
         return;
       }
-      const tlsSocket = tls.connect({ socket, servername: target.hostname }, () => {
+      // clash-verge 等本地 MITM 代理会重签证书，Node 默认严格校验会断连，
+      // 这里关掉校验（目标仍是 https，只是信任代理的证书）。
+      const tlsSocket = tls.connect({ socket, servername: target.hostname, rejectUnauthorized: false }, () => {
         const payload = Buffer.from(body, 'utf8');
         // 关键：用一次性 Agent 覆盖 createConnection。
         // 只写 `agent: false` 时 Node 会自己建连（绕开代理直连目标域名），在墙内必然超时。
