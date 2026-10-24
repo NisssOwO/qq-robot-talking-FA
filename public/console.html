@@ -2294,6 +2294,11 @@ button:active:not(:disabled) {
       <h2>群聊黑话 / 网络用语库</h2>
       <div class="meta">DSH 会从群聊中自动提取疑似黑话候选；二代仿真模式下 AI 也可用 <code>qq_slang_submit</code> 主动提交陌生词。候选可批量送 DSH 深度联网研究，研究结果回到控制台由你删改修正后转正；确认后的词条会写入“黑话提示词”，注入一代/二代 AI 的聊天上下文，成为 AI 可查询和使用的记忆。</div>
 
+      <div class="row" style="margin-top:10px;align-items:center;gap:10px">
+        <button id="slangQuickToggle" class="small" style="font-weight:600">自动提取：已关闭</button>
+        <span class="meta" id="slangQuickHint">关着的时候不会自己学新词；点左边的按钮就打开。</span>
+      </div>
+
       <div class="slang-tabs">
         <button class="slang-tab active" data-slang-tab="candidate">候选词</button>
         <button class="slang-tab" data-slang-tab="confirmed">已确认</button>
@@ -4627,6 +4632,7 @@ function loadSlangConfig() {
   api('/api/slang').then(r => {
     const c = r.config || {};
     document.getElementById('slangEnabled').checked = c.enabled !== false;
+    syncSlangQuick(c.enabled !== false);
     document.getElementById('slangExtractMin').value = c.extractMinMessages ?? 10;
     document.getElementById('slangCooldown').value = c.extractCooldownMs ?? 300000;
     document.getElementById('slangThresholds').value = (c.inferenceThresholds || [2, 4, 8]).join(', ');
@@ -4636,6 +4642,41 @@ function loadSlangConfig() {
     document.getElementById('slangAutoResearch').checked = c.autoResearch !== false;
   }).catch(() => {});
 }
+// 顶部一键开关：只切 slang.enabled，其它参数原样带上，避免把配置写丢
+function syncSlangQuick(on) {
+  const btn = document.getElementById('slangQuickToggle');
+  const hint = document.getElementById('slangQuickHint');
+  if (!btn) return;
+  btn.textContent = on ? '自动提取：已开启' : '自动提取：已关闭';
+  btn.dataset.on = on ? '1' : '0';
+  btn.style.background = on ? 'var(--ok)' : '';
+  btn.style.color = on ? '#fff' : '';
+  btn.style.borderColor = on ? 'transparent' : '';
+  if (hint) hint.textContent = on ? '群里有新消息会自动挑候选词；不想学了就再点一下。' : '关着的时候不会自己学新词；点左边的按钮就打开。';
+}
+
+document.getElementById('slangQuickToggle').addEventListener('click', async () => {
+  const btn = document.getElementById('slangQuickToggle');
+  const cur = btn.dataset.on === '1';
+  const next = !cur;
+  btn.disabled = true;
+  try {
+    const r = await api('/api/slang/config', 'POST', { enabled: next });
+    if (r && r.ok) {
+      syncSlangQuick(next);
+      const el = document.getElementById('slangEnabled');
+      if (el) el.checked = next;
+      document.getElementById('slangMsg').textContent = next ? '✅ 已开启自动提取' : '⏸ 已关闭自动提取';
+    } else {
+      document.getElementById('slangMsg').textContent = '❌ ' + ((r && r.error) || '切换失败');
+    }
+  } catch (e) {
+    document.getElementById('slangMsg').textContent = '❌ ' + (e && e.message ? e.message : '切换失败');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById('slangConfigSave').addEventListener('click', async () => {
   const r = await api('/api/slang/config', 'POST', {
     enabled: document.getElementById('slangEnabled').checked,
