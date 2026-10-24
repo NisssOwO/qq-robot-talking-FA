@@ -37,6 +37,7 @@ src/media-normalize.js
 # 开发测试脚本：只保留构建链路要用的，其余留在本地
 scripts/*
 !scripts/build-standalone.mjs
+!scripts/build-installer.mjs
 !scripts/dev-standalone-live.mjs
 !scripts/dev-standalone-smoke.mjs
 !scripts/dsh-endpoint.mjs
