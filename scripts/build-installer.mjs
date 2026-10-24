@@ -10,6 +10,7 @@
 //   node scripts/build-installer.mjs                # 完整流程
 //   node scripts/build-installer.mjs --keep         # 复用已有的 dist\release，不重新打
 //   node scripts/build-installer.mjs --with-gateway # 连网关一起打包（只给自己用，别公开分发）
+//   node scripts/build-installer.mjs --no-sign       # 不签名
 //
 // 需要 Inno Setup 6（https://jrsoftware.org/isdl.php，或 winget install JRSoftware.InnoSetup）。
 
@@ -112,7 +113,35 @@ step('检查发布目录有没有夹带个人数据', () => {
   console.log('  ✓ 没有会话/印象/黑话/表情/登录态，config.json 是空模板');
 });
 
-// ---------- 3. 编译安装包 ----------
+// ---------- 3. 签名（可选） ----------
+// 用本机的自签名代码签名证书给主程序和安装包打 Authenticode 签名。
+// 自签名只在本机信任列表里算「有效」，别人电脑上仍会提示未知发布者 —— 要彻底消掉
+// 只能买 CA 证书或用 SignPath 这类给开源项目的免费签名服务。
+const SIGN = path.join(ROOT, 'installer', 'sign.ps1');
+const wantSign = !argv.includes('--no-sign') && fs.existsSync(SIGN);
+
+function signFile(file) {
+  try {
+    const out = execFileSync('powershell.exe', [
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SIGN, '-Path', file,
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    process.stdout.write(out.replace(/^/gm, '  '));
+    return true;
+  } catch (err) {
+    if (err.status === 2) {
+      console.log('  跳过：本机没有代码签名证书');
+      return false;
+    }
+    console.warn(`  签名失败（${err.status}）：${String(err.stdout || err.message).trim()}`);
+    return false;
+  }
+}
+
+if (wantSign) {
+  step('给主程序打签名', () => signFile(path.join(RELEASE, 'QQ聊天机器人.exe')));
+}
+
+// ---------- 4. 编译安装包 ----------
 const iscc = findIscc();
 if (!iscc) {
   console.error('\n找不到 ISCC.exe。装一个 Inno Setup 6：');
@@ -129,12 +158,18 @@ step(`编译安装包（${path.basename(iscc)}，版本 ${version}）`, () => {
   ], { cwd: ROOT, stdio: 'inherit' });
 });
 
-// ---------- 4. 结果 ----------
+// ---------- 5. 签名安装包 ----------
 const setup = path.join(ROOT, 'dist', `${'QQ聊天机器人'}-${version}-setup.exe`);
 if (!fs.existsSync(setup)) {
   console.error(`\n编译好像没成功，找不到 ${setup}`);
   process.exit(1);
 }
+if (wantSign) {
+  step('给安装包打签名', () => signFile(setup));
+}
+
+
+// ---------- 6. 结果 ----------
 const mb = (fs.statSync(setup).size / 1024 / 1024).toFixed(1);
 console.log(`\n完成：${setup}`);
 console.log(`  体积 ${mb} MB，版本 ${version}${withGateway ? '（含网关）' : '（不含网关）'}`);

@@ -49,3 +49,7 @@ scripts/*
 # 含个人数据，不随仓库分发
 docs/CONVERSATION-COMPACT-2026-10-24.md
 docs/LONG-MEMORY-TODO.md
+
+# 本机签名证书：私钥绝不能进仓库
+.local/
+*.pfx
