@@ -5,7 +5,7 @@
 ;   /DSourceDir=...\dist\release   已经打好的绿色目录（不带网关、不带个人数据）
 ;
 ; 手动编译：
-;   ISCC.exe /DAppVersion=1.0.6 /DSourceDir="F:\产出\shiny colors\dist\release" installer\qq-bot.iss
+;   ISCC.exe /DAppVersion=1.0.6 /DSourceDir="dist\release" installer\qq-bot.iss
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"

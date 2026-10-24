@@ -146,7 +146,7 @@ async function listQQProcesses() {
   return list;
 }
 
-// 注册表里 QQ 的 DisplayIcon 形如 `F:\QQNT\QQ.exe,0`，去掉末尾的图标序号才是路径。
+// 注册表里 QQ 的 DisplayIcon 形如 `D:\QQ\QQ.exe,0`，去掉末尾的图标序号才是路径。
 function cleanDisplayIcon(raw) {
   return String(raw ?? '').trim().replace(/^"|"$/g, '').replace(/,\s*-?\d+$/, '').trim();
 }
@@ -172,7 +172,7 @@ function readQQFromRegistry() {
   });
 }
 
-// 探测顺序：正在跑的 QQ → 配置里存的 → 注册表。用户自定义安装（比如 F:\QQNT）只能靠前两者。
+// 探测顺序：正在跑的 QQ → 配置里存的 → 注册表。用户自定义安装（比如 D:\QQ）只能靠前两者。
 async function detectQQPath(cfg, procs) {
   const list = procs ?? (await listQQProcesses());
   // 只认真正的主程序：QQ 还会起 QQProtect 之类的进程，路径判错就会去注入错的目标。
@@ -219,7 +219,7 @@ async function startQQ() {
   return { ok: false, code: 'qq-timeout', error: 'QQ 启动了，但 30 秒内没等到进程' };
 }
 
-// 让用户直接挑文件，省得手打 F:\QQNT\QQ.exe 这种路径。
+// 让用户直接挑文件，省得手打 D:\QQ\QQ.exe 这种路径。
 // WinForms 的对话框必须在 STA 线程里开，所以带 -STA。
 function pickQQPath() {
   return new Promise((resolve) => {
