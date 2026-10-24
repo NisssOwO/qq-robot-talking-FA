@@ -921,7 +921,7 @@ $('main').appendChild(qqView);
 const startView = document.createElement('section');
 startView.className = 'view';
 startView.dataset.view = 'start';
-startView.innerHTML = head('QUICK START', '快速开始', '三步，做完它就能在群里说话。下面的状态是实时检测的，不用担心漏配。') + `
+startView.innerHTML = head('QUICK START', '快速开始', '四步，做完它就能在群里说话。下面的状态是实时检测的，不用担心漏配。') + `
 <div class="grid" style="max-width:980px">
   <div class="card span2"><div id="start-steps" style="padding:2px 18px 8px"></div></div>
   <div class="card span2">
@@ -952,30 +952,45 @@ function startRow(no, title, desc, done, actions) {
 
 async function loadStart() {
   const box = $('start-steps');
-  if (!box) return;
+  if (!box || startView.hidden) return;
   try {
     const [s, g] = await Promise.all([api('status'), api('gateway')]);
     const keyOk = Boolean(s.config?.hasKey);
     const scopes = [...(s.config?.groups || []), ...(s.config?.private || [])];
     const gwOk = Boolean(g.onebot?.ws);
+    const gwInstalled = Boolean(s.gateway?.installed);
+    const qqOk = Boolean(g.qq?.installed);
     const rows = [];
 
+    rows.push(startRow(1, '装 QQ 客户端',
+      qqOk
+        ? '找到了：' + (g.qq.path || '') + '。网关是挂进 QQ 进程里跑的，所以本机得先有 QQ。'
+        : '网关是挂进 QQ 进程里跑的，所以本机得先有 QQ（腾讯的软件，我们不随包分发）。装好并登录过一次，再回来点「重新检测」。',
+      qqOk,
+      qqOk
+        ? '<button class="btn mini" id="s-qq-again">重新检测</button>'
+        : '<button class="btn mini primary" id="s-qq-dl">去下载 QQ</button><button class="btn mini" id="s-qq-again">装好了，重新检测</button>'));
 
-    rows.push(startRow(1, '填模型密钥',
+    rows.push(startRow(2, '填模型密钥',
       '语言模型是它说话的大脑。至少要有一个 API Key；接口地址和模型名默认已经填好，用的是 DeepSeek。',
       keyOk,
       '<button class="btn mini' + (keyOk ? '' : ' primary') + '" id="s-key">' + (keyOk ? '去修改' : '去填写') + '</button>'));
 
-    rows.push(startRow(2, '连上 QQ',
-      gwOk
-        ? '网关在线，QQ 已登录。下一步只差把机器人启动起来。'
-        : '点下面的按钮拉起 SnowLuma，然后在打开的页面里用手机 QQ 扫码登录。',
-      gwOk,
-      gwOk
-        ? '<button class="btn mini primary" id="s-bot-start">启动机器人</button><button class="btn mini" id="s-gw-login">打开网关页面</button>'
-        : '<button class="btn mini primary" id="s-gw-start">启动网关</button><button class="btn mini" id="s-gw-refresh">刷新状态</button><button class="btn mini" id="s-gw-login">登录页</button>'));
+    let gwDesc;
+    let gwActions;
+    if (!gwInstalled) {
+      gwDesc = '包里没带网关（SnowLuma 的许可不允许随包分发），点这个按钮我帮你下完整版装上，大约 40 MB，装完不用自己解压。';
+      gwActions = '<button class="btn mini primary" id="s-gw-install">帮我下载并装好</button><button class="btn mini" id="s-gw-manual">自己去下载页</button>';
+    } else if (!gwOk) {
+      gwDesc = '网关装好了。点「启动网关」把它拉起来，再点「登录页」，用手机 QQ 扫码。这一步做完这行会自动变绿，不用手动刷新。';
+      gwActions = '<button class="btn mini primary" id="s-gw-start">启动网关</button><button class="btn mini" id="s-gw-login">登录页</button><button class="btn mini" id="s-gw-refresh">刷新状态</button>';
+    } else {
+      gwDesc = '网关在线，QQ 已登录。最后一步：把机器人启动起来，它才会开始回消息。';
+      gwActions = '<button class="btn mini primary" id="s-bot-start">启动机器人</button><button class="btn mini" id="s-gw-login">打开网关页面</button>';
+    }
+    rows.push(startRow(3, '连上 QQ', gwDesc, gwOk, gwActions));
 
-    rows.push(startRow(3, '定对话范围',
+    rows.push(startRow(4, '定对话范围',
       '不填的话它什么都不回。至少要有一个群号（或私聊 QQ），再加一个管理员 QQ——管理员的私聊和指令才有权限。',
       scopes.length > 0,
       '<button class="btn mini' + (scopes.length ? '' : ' primary') + '" id="s-scope">' + (scopes.length ? '去修改' : '去填写') + '</button>'));
@@ -984,14 +999,30 @@ async function loadStart() {
 
     const hint = $('start-hint');
     if (hint) {
-      const left = [!keyOk, !scopes.length].filter(Boolean).length;
-      hint.textContent = left ? '还差 ' + left + ' 处没配完（第 3 步随时可做）' : '都配好了，可以进去了';
+      const left = [!qqOk, !keyOk, !scopes.length].filter(Boolean).length;
+      hint.textContent = left
+        ? '还差 ' + left + ' 处没配完（第 4 步随时可做）'
+        : (gwOk ? '都配好了。去群里 @它 说句话试试' : '都配好了，就差把网关和机器人拉起来');
     }
 
+    if ($('s-qq-dl')) $('s-qq-dl').onclick = () => window.open(g.qq?.downloadUrl || 'https://im.qq.com/pcqq', '_blank');
     if ($('s-qq-again')) $('s-qq-again').onclick = () => void loadStart();
     if ($('s-key')) $('s-key').onclick = () => go('model');
     if ($('s-scope')) $('s-scope').onclick = () => go('allow');
     if ($('s-gw-refresh')) $('s-gw-refresh').onclick = () => void loadStart();
+    if ($('s-gw-manual')) $('s-gw-manual').onclick = () => window.open('https://github.com/SnowLuma/SnowLuma/releases/latest', '_blank');
+    if ($('s-gw-install')) $('s-gw-install').onclick = async () => {
+      const btn = $('s-gw-install');
+      btn.disabled = true; btn.textContent = '正在下载…';
+      try {
+        const r = await api('gateway/install', { method: 'POST' });
+        toast(r.already ? '网关已经装好了' : '装好了：' + (r.version || r.tag));
+      } catch (e) {
+        toast('下载失败：' + (e.message || e) + '，可以点「自己去下载页」', true);
+      }
+      btn.disabled = false; btn.textContent = '帮我下载并装好';
+      void loadStart();
+    };
     if ($('s-bot-start')) $('s-bot-start').onclick = async () => {
       const btn = $('s-bot-start');
       btn.disabled = true; btn.textContent = '启动中…';
@@ -1007,8 +1038,7 @@ async function loadStart() {
       btn.disabled = true; btn.textContent = '正在拉起…';
       try {
         const r = await api('gateway/start', { method: 'POST' });
-        if (r.already) toast('网关已经在跑了');
-        else toast('已发起启动，稍等一下');
+        toast(r.already ? '网关已经在跑了' : '已发起启动，稍等一下');
       } catch (e) { toast('启动失败：' + (e.message || e), true); }
       setTimeout(() => void loadStart(), 4000);
       setTimeout(() => { btn.disabled = false; btn.textContent = '启动网关'; }, 6000);
@@ -1017,6 +1047,9 @@ async function loadStart() {
       try { const r = await api('open-webui'); window.open(r.url || 'http://127.0.0.1:5099/', '_blank'); }
       catch (e) { toast('打不开：' + (e.message || e), true); }
     };
+
+    // 网关装好但还没起来时自己盯着，省得用户手动刷新（页面切走就不再轮询）。
+    if (gwInstalled && !gwOk) setTimeout(() => void loadStart(), 5000);
   } catch (e) {
     box.innerHTML = '<div class="hint" style="padding:16px 0">读取状态失败：' + (e.message || e) + '</div>';
   }
