@@ -1,4 +1,4 @@
-# 给 exe 打 Authenticode 签名（本机自签名证书）。
+﻿# 给 exe 打 Authenticode 签名（本机自签名证书）。
 #
 # 用法：
 #   powershell -NoProfile -ExecutionPolicy Bypass -File installer\sign.ps1 -Path dist\xxx.exe
