@@ -22,3 +22,29 @@ napcat/
 napcat-test/
 dsh-session-*.zip
 _test-ledger.jsonl
+
+# 本机环境与个人快捷方式
+.npmrc
+restart.bat
+watch-dsh.bat
+
+# 不随仓库分发的东西
+assets/
+roles/.refs/
+scripts/fixtures/
+src/media-normalize.js
+
+# 开发测试脚本：只保留构建链路要用的，其余留在本地
+scripts/*
+!scripts/build-standalone.mjs
+!scripts/dev-standalone-live.mjs
+!scripts/dev-standalone-smoke.mjs
+!scripts/dsh-endpoint.mjs
+!scripts/patch-snowluma-sdk.mjs
+!scripts/sync-standalone-prompts.mjs
+!scripts/test-quiet-hours.mjs
+!scripts/restore-user-data.mjs
+
+# 含个人数据，不随仓库分发
+docs/CONVERSATION-COMPACT-2026-10-24.md
+docs/LONG-MEMORY-TODO.md
