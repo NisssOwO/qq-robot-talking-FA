@@ -10,6 +10,10 @@
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
+; VersionInfoVersion 只接受 4 段纯数字（1.0.6.fix 这种要由构建脚本折算成 1.0.6.0）。
+#ifndef VersionInfoVersion
+  #define VersionInfoVersion AppVersion
+#endif
 #ifndef SourceDir
   #define SourceDir "..\dist\release"
 #endif
@@ -42,7 +46,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
 LicenseFile=..\LICENSE
-VersionInfoVersion={#AppVersion}.0
+VersionInfoVersion={#VersionInfoVersion}
 VersionInfoDescription={#AppName} 安装程序
 VersionInfoProductName={#AppName}
 VersionInfoCompany={#AppPublisher}

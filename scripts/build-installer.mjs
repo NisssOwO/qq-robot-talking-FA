@@ -26,6 +26,12 @@ const withGateway = argv.includes('--with-gateway');
 
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const version = pkg.version;
+// Inno 的 VersionInfoVersion 只认 4 段数字，1.0.6.fix 这种要折算成 1.0.6.0。
+const numericVersion = (() => {
+  const parts = String(version).split(/[.\-+]/).filter((x) => /^\d+$/.test(x)).slice(0, 3);
+  while (parts.length < 3) parts.push('0');
+  return parts.join('.') + '.0';
+})();
 const RELEASE = path.join(ROOT, 'dist', 'release');
 const ISS = path.join(ROOT, 'installer', 'qq-bot.iss');
 
@@ -153,6 +159,7 @@ if (!iscc) {
 step(`编译安装包（${path.basename(iscc)}，版本 ${version}）`, () => {
   execFileSync(iscc, [
     `/DAppVersion=${version}`,
+    `/DVersionInfoVersion=${numericVersion}`,
     `/DSourceDir=${RELEASE}`,
     ISS,
   ], { cwd: ROOT, stdio: 'inherit' });

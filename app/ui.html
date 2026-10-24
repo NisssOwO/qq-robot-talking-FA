@@ -3377,10 +3377,14 @@ const escVer = function (v) {
   });
 };
 
-function verRow(label, value, tone, note, link) {
+function verRow(label, value, tone, note, links) {
   const badge = tone ? '<span class="badge ' + tone + '">' + escVer(note) + '</span>' : '';
-  const a = link ? ' <a class="link" href="' + escVer(link.href) + '" target="_blank" rel="noreferrer">' + escVer(link.text) + '</a>' : '';
-  return '<div style="' + VER_ROW + '"><div class="hint">' + label + '</div><div><b>' + escVer(value) + '</b> ' + badge + a + '</div></div>';
+  const list = Array.isArray(links) ? links : links ? [links] : [];
+  const actions = list.map(function (l) {
+    if (l.act) return ' <button class="btn" data-ver-act="' + escVer(l.act) + '" style="margin-left:8px">' + escVer(l.text) + '</button>';
+    return ' <a class="link" href="' + escVer(l.href) + '" target="_blank" rel="noreferrer">' + escVer(l.text) + '</a>';
+  }).join('');
+  return '<div style="' + VER_ROW + '"><div class="hint">' + label + '</div><div><b>' + escVer(value) + '</b> ' + badge + actions + '</div></div>';
 }
 
 function renderVersion(v) {
@@ -3397,11 +3401,11 @@ function renderVersion(v) {
     verRow('本程序', 'v' + (a.version || '?'),
       a.updateAvailable ? 'warn' : a.error ? 'off' : 'on',
       a.updateAvailable ? '有新版 v' + a.latest : a.error ? '查不到最新版' : '已是最新',
-      a.updateAvailable ? { href: a.url, text: '去下载' } : null),
+      a.updateAvailable ? [{ act: 'app', text: '立即更新' }, { href: a.url, text: '下载页' }] : null),
     verRow('SnowLuma', s.version ? 'v' + s.version : '未安装',
       s.updateAvailable ? 'warn' : s.error ? 'off' : 'on',
       s.updateAvailable ? '有新版 v' + s.latest : s.error ? '查不到最新版' : '已是最新',
-      s.updateAvailable ? { href: s.url, text: '去下载' } : null),
+      s.updateAvailable ? [{ act: 'gateway', text: '立即更新' }, { href: s.url, text: '下载页' }] : null),
     verRow('本机 QQ', q.version || '没找到',
       q.changed ? 'warn' : null,
       q.changed ? '升级过（上次 ' + q.previous + '）' : '',
@@ -3420,6 +3424,25 @@ async function loadVersion(force) {
   }
 }
 if ($('ver-refresh')) $('ver-refresh').onclick = function () { void loadVersion(true); };
+if ($('ver-body')) $('ver-body').addEventListener('click', async function (ev) {
+  const btn = ev.target.closest('[data-ver-act]');
+  if (!btn || btn.disabled) return;
+  const act = btn.dataset.verAct;
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = act === 'app' ? '下载中…' : '更新中…';
+  try {
+    const r = await api(act === 'app' ? 'app/update' : 'gateway/update', { method: 'POST' });
+    if (r.updating) toast('已开始替换，面板会自己重启，等十几秒就好');
+    else if (r.already) toast('已经是最新版');
+    else toast('更新完成：v' + (r.version || ''));
+    setTimeout(function () { void loadVersion(true); }, r.updating ? 8000 : 1500);
+  } catch (e) {
+    toast('更新失败：' + e.message, true);
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+});
 
 // 关窗时用 beacon 通知服务端；服务端挂 3 秒，期间有新页面加载（下面的 ping）就取消，
 // 所以刷新不会误停。点右上角 × 才是真关闭。

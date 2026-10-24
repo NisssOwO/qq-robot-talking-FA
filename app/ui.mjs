@@ -378,13 +378,29 @@ const NAPCAT_UPDATE_CACHE = path.join(STATE_DIR, 'napcat-update.json');
 const NAPCAT_RELEASE_API = 'https://api.github.com/repos/NapNeko/NapCatQQ/releases/latest';
 const UPDATE_CHECK_INTERVAL = 6 * 60 * 60 * 1000;
 
-// 版本号比较：按 . 和 - 切段，缺位补 0。9.9.36 > 9.9.22，9.9.36-53644 > 9.9.36。
+// 版本号比较。允许出现非数字段（比如 1.0.6.fix）：两边都是数字就比数值，
+// 一边数字一边不是就把带数字的那个算小，都不是就比字符串。缺位按空串处理，
+// 于是 1.0.6.fix > 1.0.6，9.9.36-53644 > 9.9.36。
 function cmpVersion(a, b) {
-  const pa = String(a ?? '').split(/[.\-+]/).map((x) => parseInt(x, 10) || 0);
-  const pb = String(b ?? '').split(/[.\-+]/).map((x) => parseInt(x, 10) || 0);
+  const pa = String(a ?? '').split(/[.\-+]/);
+  const pb = String(b ?? '').split(/[.\-+]/);
   for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
-    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (d) return d;
+    const x = pa[i] ?? '';
+    const y = pb[i] ?? '';
+    if (x === y) continue;
+    // 缺段算最小：9.9.36-53644 > 9.9.36，1.0.6.fix.1 > 1.0.6.fix，1.0.6.fix > 1.0.6
+    if (x === '') return -1;
+    if (y === '') return 1;
+    const nx = /^\d+$/.test(x);
+    const ny = /^\d+$/.test(y);
+    if (nx && ny) {
+      const d = Number(x) - Number(y);
+      if (d) return d;
+    } else if (nx !== ny) {
+      return nx ? 1 : -1;
+    } else {
+      return x < y ? -1 : 1;
+    }
   }
   return 0;
 }
@@ -464,11 +480,20 @@ async function cachedRelease(key, force = false) {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = await res.json();
+      const body_assets = Array.isArray(body.assets) ? body.assets : [];
+      // 发布时挂的两个文件：安装包和绿色版 zip。这里顺手存下地址，
+      // 自动更新时就不用再查一次 API。
+      const setupAsset = body_assets.find((a) => /setup\.exe$/i.test(String(a.name || '')));
+      const zipAsset = body_assets.find((a) => /\.zip$/i.test(String(a.name || '')));
       const entry = {
         version: String(body.tag_name ?? '').replace(/^v/i, '').trim(),
         url: String(body.html_url ?? ''),
         checkedAt: Date.now(),
-        error: ''
+        error: '',
+        setupUrl: String(setupAsset?.browser_download_url ?? ''),
+        setupSize: Number(setupAsset?.size ?? 0),
+        zipUrl: String(zipAsset?.browser_download_url ?? ''),
+        zipSize: Number(zipAsset?.size ?? 0)
       };
       cache[key] = entry;
       writeUpdateCache(cache);
@@ -714,11 +739,20 @@ async function elevateBoot(qqPath, uin) {
 // 对不熟电脑的人是道坎，这里直接代下代装：下完整版（自带 node.exe，不用先装 Node）。
 const SNOWLUMA_RELEASE_API = 'https://api.github.com/repos/SnowLuma/SnowLuma/releases/latest';
 
-async function installGateway() {
-  if (fs.existsSync(path.join(SNOWLUMA_DIR, 'index.mjs'))) {
+async function installGateway({ force = false } = {}) {
+  const installed = fs.existsSync(path.join(SNOWLUMA_DIR, 'index.mjs'));
+  if (installed && !force) {
     return { ok: true, already: true, version: snowlumaVersion() };
   }
-  if (children.snowluma) await stopSnowLuma();
+  // force = 升级：先把自己拉起来的网关停掉，外部拉起来的就报错让用户自己关，
+  // 不然文件被占用会覆盖一半。
+  if (children.snowluma) {
+    await stopSnowLuma();
+    await new Promise((resolve) => setTimeout(resolve, 800));
+  }
+  if (await probePort(ONEBOT_WS_PORT, 800)) {
+    throw new Error('网关还在运行，而且不是面板启动的。请先手动关掉它再更新。');
+  }
 
   const res = await fetch(SNOWLUMA_RELEASE_API, {
     headers: { 'user-agent': 'qq-bot-panel', accept: 'application/vnd.github+json' },
@@ -774,7 +808,80 @@ async function installGateway() {
 
   const version = snowlumaVersion();
   log(`SnowLuma 装好了：${version || rel.tag_name}`);
-  return { ok: true, version, tag: rel.tag_name, sizeMB: Math.round(bytes / 1048576) };
+  // 升级时是把旧网关停掉才换的文件，换完顺手拉起来，用户不用再点一次。
+  let restarted = false;
+  if (force) {
+    try {
+      await startSnowLuma();
+      restarted = true;
+      log('网关已按新版本重新启动');
+    } catch (error) {
+      log(`网关没起来：${error?.message ?? error}`);
+    }
+  }
+  return { ok: true, version, tag: rel.tag_name, sizeMB: Math.round(bytes / 1048576), restarted };
+}
+
+// 面板自己更新。只有 Inno 装的版本能就地覆盖（目录里有 unins000.exe），
+// 解压版给不了可靠的替换路径，只能让用户手动换。
+// 流程：下载安装包 → 写一个接管脚本 → 停机器人 → 脚本等本进程退出后静默装到原目录 → 拉新版本
+async function updateApp() {
+  if (!fs.existsSync(path.join(ROOT, 'unins000.exe'))) {
+    throw new Error('这个目录是解压版，没有安装记录，没法自动覆盖。去 Releases 下 zip 手动替换吧。');
+  }
+  const release = await cachedRelease('app', true);
+  if (!release?.version) {
+    throw new Error(`查最新版本失败：${release?.error || '拿不到版本号'}`);
+  }
+  const current = appVersion();
+  if (cmpVersion(current, release.version) >= 0) {
+    return { ok: true, already: true, version: current };
+  }
+  if (!release.setupUrl) throw new Error('最新版没挂 setup.exe，只能去 Releases 手动下载');
+
+  const dir = path.join(STATE_DIR, 'app-update');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const setup = path.join(dir, 'setup.exe');
+  const bytes = await fetchToFile(release.setupUrl, setup);
+  log(`新版本下载完成：${(bytes / 1048576).toFixed(1)} MB（${current} → ${release.version}），准备替换…`);
+
+  // Inno 的静默安装会覆盖 {app} 下的所有文件，config.json 与 state\ 用
+  // onlyifdoesntexist / uninsneveruninstall 保护，不会被清掉。
+  const q = (s) => String(s).replace(/'/g, "''");
+  const launcher = path.join(ROOT, 'QQ聊天机器人.exe');
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    `$oldPid = ${process.pid}`,
+    '$deadline = (Get-Date).AddSeconds(30)',
+    'while ((Get-Date) -lt $deadline) {',
+    '  if (-not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) { break }',
+    '  Start-Sleep -Milliseconds 300',
+    '}',
+    'Start-Sleep -Milliseconds 600',
+    `Start-Process -FilePath '${q(setup)}' -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS','/DIR="${q(ROOT)}"' -Wait`,
+    'Start-Sleep -Milliseconds 800',
+    `if (Test-Path '${q(launcher)}') { Start-Process -FilePath '${q(launcher)}' }`,
+    ''
+  ].join('\r\n');
+  const scriptPath = path.join(dir, 'apply.ps1');
+  // 带 BOM，PowerShell 5.1 才不会把中文路径按 GBK 读错。
+  fs.writeFileSync(scriptPath, `\ufeff${script}`, 'utf8');
+
+  try {
+    await stopBot();
+  } catch (error) {
+    log(`停机器人时出错（继续更新）：${error?.message ?? error}`);
+  }
+  const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true
+  });
+  child.unref();
+  log('接管脚本已启动，面板即将退出并重装…');
+  setTimeout(() => process.exit(0), 1500);
+  return { ok: true, updating: true, from: current, to: release.version, sizeMB: Math.round(bytes / 1048576) };
 }
 
 async function fetchToFile(url, file) {
@@ -1666,6 +1773,22 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'POST' && sub === 'gateway/install') {
         try {
           return json(res, 200, await installGateway());
+        } catch (e) {
+          return json(res, 500, { ok: false, error: e.message });
+        }
+      }
+      // 网关升级：不管装没装，都下最新版替换（保留 config/data/logs）。
+      if (req.method === 'POST' && sub === 'gateway/update') {
+        try {
+          return json(res, 200, await installGateway({ force: true }));
+        } catch (e) {
+          return json(res, 500, { ok: false, error: e.message });
+        }
+      }
+      // 面板自己更新：下载 setup.exe，交给独立脚本覆盖安装并重启。
+      if (req.method === 'POST' && sub === 'app/update') {
+        try {
+          return json(res, 200, await updateApp());
         } catch (e) {
           return json(res, 500, { ok: false, error: e.message });
         }
