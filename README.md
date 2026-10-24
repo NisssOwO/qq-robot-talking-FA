@@ -4,7 +4,8 @@
 
 自带控制面板、角色包与日语语音，**不依赖 DeepSeek Harness**。
 QQ 登录需要另外装一个免费的网关（SnowLuma，两分钟，见[准备工作](#准备工作这些东西从哪来)第 0 步）。
-两种装法：跑 `QQ聊天机器人-x.y.z-setup.exe` 一路下一步，或者解压 zip 直接双击 `QQ聊天机器人.exe`。
+两种装法都在 [Releases](https://github.com/NisssOwO/qq-robot-talking-FA/releases/latest) 里：
+跑 `qq-robot-talking-FA-x.y.z-setup.exe` 一路下一步，或者解压 `qq-robot-talking-FA-vx.y.z.zip` 直接双击 `QQ聊天机器人.exe`。
 装好之后在面板里填几项配置，就能开始聊。
 
 > 界面是网页做的（`http://127.0.0.1:3199`），用系统自带的 Edge 以「应用模式」打开，
