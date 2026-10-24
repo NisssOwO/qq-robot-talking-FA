@@ -1080,34 +1080,42 @@ function snowlumaNode() {
 // 本程序统一用 38000/38001，所以启动网关之前先把它自己的配置改过来。
 function normalizeGatewayPorts() {
   const cfgDir = path.join(SNOWLUMA_DIR, 'config');
-  const result = { files: 0, changed: [] };
+  const result = { files: 0, changed: [], tokenFixed: [] };
   if (!fs.existsSync(cfgDir)) return result;
   let names = [];
   try { names = fs.readdirSync(cfgDir).filter((n) => /^onebot_.*\.json$/i.test(n)); } catch { return result; }
   result.files = names.length;
+  // 桥接只认 config.snowluma.accessToken 这一个 token。网关那边如果配成别的
+  // （重建目录后 SnowLuma 会随机生成一对新 token），日志里就是
+  // 「rejected unauthorized WebSocket upgrade」+ 一直连不上 38000。这里顺手对齐。
+  const wantToken = String(readConfig()?.snowluma?.accessToken || '').trim();
   for (const name of names) {
     const file = path.join(cfgDir, name);
     try {
       const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
       let dirty = false;
-      for (const s of raw?.networks?.httpServers ?? []) {
+      let tokenDirty = false;
+      const fix = (s) => {
         if (Number(s.port) === 3000) { s.port = ONEBOT_HTTP_PORT; dirty = true; }
-      }
-      for (const s of raw?.networks?.wsServers ?? []) {
         if (Number(s.port) === 3001) { s.port = ONEBOT_WS_PORT; dirty = true; }
-      }
-      // 面板要连 38000/38001，如果用户自己填过别的端口就别动
-      if (dirty) {
+        if (wantToken && s.accessToken !== wantToken) { s.accessToken = wantToken; tokenDirty = true; }
+      };
+      for (const s of raw?.networks?.httpServers ?? []) fix(s);
+      for (const s of raw?.networks?.wsServers ?? []) fix(s);
+      // 面板要连 38000/38001，如果用户自己填过别的端口就别动；token 必须一致，无条件对齐
+      if (dirty || tokenDirty) {
         const tmp = file + '.tmp';
         fs.writeFileSync(tmp, JSON.stringify(raw, null, 2));
         fs.renameSync(tmp, file);
-        result.changed.push(name);
+        if (dirty) result.changed.push(name);
+        if (tokenDirty) result.tokenFixed.push(name);
       }
     } catch (error) {
       log(`网关配置读不出 ${name}：${error?.message ?? error}`);
     }
   }
   if (result.changed.length) log(`网关端口已统一到 ${ONEBOT_HTTP_PORT}/${ONEBOT_WS_PORT}：${result.changed.join(', ')}`);
+  if (result.tokenFixed.length) log(`网关 token 已对齐到配置文件里的值：${result.tokenFixed.join(', ')}（要重启网关才生效）`);
   return result;
 }
 
