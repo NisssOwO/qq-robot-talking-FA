@@ -72,6 +72,10 @@ h1 { margin: 4px 0 4px; font-size: 21px; font-weight: 650; letter-spacing: -.2px
 .card-head .spacer { flex: 1; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
 .grid > .span2 { grid-column: span 2; }
+@media (max-width: 960px) {
+  .grid { grid-template-columns: 1fr; }
+  .grid > .span2 { grid-column: auto; }
+}
 
 /* ── 状态灯 ── */
 .led { width: 8px; height: 8px; border-radius: 50%; background: #b8bfcc; flex: 0 0 8px;
@@ -913,7 +917,7 @@ const startView = document.createElement('section');
 startView.className = 'view';
 startView.dataset.view = 'start';
 startView.innerHTML = head('QUICK START', '快速开始', '三步，做完它就能在群里说话。下面的状态是实时检测的，不用担心漏配。') + `
-<div class="grid">
+<div class="grid" style="max-width:980px">
   <div class="card span2"><div id="start-steps" style="padding:2px 18px 8px"></div></div>
   <div class="card span2">
     <div class="field-actions" style="padding:14px 18px">
@@ -963,7 +967,7 @@ async function loadStart() {
         : '点下面的按钮拉起 SnowLuma，然后在打开的页面里用手机 QQ 扫码登录。',
       gwOk,
       gwOk
-        ? '<button class="btn mini" id="s-gw-login">打开网关页面</button>'
+        ? '<button class="btn mini primary" id="s-bot-start">启动机器人</button><button class="btn mini" id="s-gw-login">打开网关页面</button>'
         : '<button class="btn mini primary" id="s-gw-start">启动网关</button><button class="btn mini" id="s-gw-refresh">刷新状态</button><button class="btn mini" id="s-gw-login">登录页</button>'));
 
     rows.push(startRow(3, '定对话范围',
@@ -983,6 +987,16 @@ async function loadStart() {
     if ($('s-key')) $('s-key').onclick = () => go('model');
     if ($('s-scope')) $('s-scope').onclick = () => go('allow');
     if ($('s-gw-refresh')) $('s-gw-refresh').onclick = () => void loadStart();
+    if ($('s-bot-start')) $('s-bot-start').onclick = async () => {
+      const btn = $('s-bot-start');
+      btn.disabled = true; btn.textContent = '启动中…';
+      try {
+        await api('bot/start', { method: 'POST' });
+        toast('机器人启动中，几秒后去「启动与状态」看它活没活');
+      } catch (e) { toast('启动失败：' + (e.message || e), true); }
+      setTimeout(() => void loadStart(), 5000);
+      setTimeout(() => { btn.disabled = false; btn.textContent = '启动机器人'; }, 7000);
+    };
     if ($('s-gw-start')) $('s-gw-start').onclick = async () => {
       const btn = $('s-gw-start');
       btn.disabled = true; btn.textContent = '正在拉起…';
