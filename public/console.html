@@ -4790,6 +4790,9 @@ function setConsolePage(page, { updateHash = true, focus = false, target = '' } 
   closeConsoleSearch();
   // 语音库按需加载：进入二代仿真页时才探测（避免每次开控制台都压网关）。
   if (page === 'social-v2' && typeof loadVoiceLibrary === 'function') loadVoiceLibrary();
+  // 人格卡随时可能被别处改掉（面板编辑器、直接改文件），每次切进来都重读一遍；
+  // 面板那边是复用同一个 iframe，不重载文档，所以这里不自查就一直是进页那一刻的旧列表。
+  if (page === 'persona' && typeof refreshRoles === 'function') refreshRoles();
   if (focus) {
     document.getElementById('mainContent').focus({ preventScroll: true });
     document.getElementById(target || 'mainContent')?.scrollIntoView({ block: 'start', behavior: 'instant' });
