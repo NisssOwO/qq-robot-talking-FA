@@ -65,7 +65,7 @@
     "interceptNotify": true
   },
   "slang": {
-    "enabled": true,
+    "enabled": false,
     "extractMinMessages": 10,
     "extractCooldownMs": 300000,
     "inferenceThresholds": [
@@ -76,7 +76,7 @@
     "injectMax": 8,
     "learnerPreset": "qq-chat",
     "workspaceTitle": "QQ 黑话学习",
-    "autoResearch": true
+    "autoResearch": false
   },
   "social": {
     "enabled": true,
@@ -274,8 +274,8 @@
       "windowMin": 20,
       "stickerId": "",
       "text": {
-        "ja": "",
-        "zh": ""
+        "ja": "あら～、もう23時ですよ～。プロデューサーさん、そろそろ寝てくださいね～",
+        "zh": "哎呀～已经23点啦～制作人，差不多该睡了哦～"
       }
     }
   },
