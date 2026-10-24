@@ -16,3 +16,9 @@ snowluma/
 SnowLuma-*/
 启动全部.bat
 _snowluma-catalog.json
+
+# 本地实验与临时产物（不进仓库）
+napcat/
+napcat-test/
+dsh-session-*.zip
+_test-ledger.jsonl
