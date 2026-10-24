@@ -569,6 +569,11 @@ statusView.innerHTML = head('LAUNCHER', '启动与状态', '把网关和机器�
       <li>解压后把文件夹改名成 <code>snowluma</code>，放到本程序目录下（和 <code>node.exe</code> 同一层）。</li>
       <li>回到这一页点「启动网关」，等灯变绿。</li>
     </ol>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="primary" id="gw-install">帮我下载并装好</button>
+      <button class="btn" id="gw-manual">自己去下载页</button>
+      <span class="hint" id="gw-install-hint">会下 40 MB 左右，第一次要等一两分钟</span>
+    </div>
   </div>
 </div>
 
@@ -1023,6 +1028,29 @@ async function finishOnboarding() {
 }
 if ($('start-finish')) $('start-finish').onclick = () => void finishOnboarding();
 if ($('start-skip')) $('start-skip').onclick = () => void finishOnboarding();
+
+// 缺网关卡片上的「帮我下载并装好」：面板后端去 GitHub 下完整版、解开、放进 snowluma\。
+// 旧目录的 config\ data\ 会保留，所以装完不用重新扫码。
+if ($('gw-manual')) $('gw-manual').onclick = () => window.open('https://github.com/SnowLuma/SnowLuma/releases/latest', '_blank');
+if ($('gw-install')) $('gw-install').onclick = async () => {
+  const btn = $('gw-install');
+  const hint = $('gw-install-hint');
+  btn.disabled = true; btn.textContent = '正在下载…';
+  hint.textContent = '正在从 GitHub 拉完整版，别关这个页面';
+  try {
+    const r = await api('gateway/install', { method: 'POST' });
+    if (r.already) {
+      hint.textContent = '已经有网关了（' + (r.version || '') + '），刷新一下就行';
+      setTimeout(() => location.reload(), 1200);
+      return;
+    }
+    hint.textContent = '装好了：' + (r.version || r.tag) + '，正在刷新…';
+    setTimeout(() => location.reload(), 1500);
+  } catch (e) {
+    hint.textContent = '自动下载失败：' + (e.message || e) + '。可以点右边手动下。';
+    btn.disabled = false; btn.textContent = '再试一次';
+  }
+};
 
 // ── 自建页：静默时间 ────────────────────────────────────
 // 运行总览页已合并进「启动与状态」：两页原本是同一份内容，留一页即可。

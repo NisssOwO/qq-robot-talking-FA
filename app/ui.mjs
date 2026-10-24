@@ -708,6 +708,75 @@ async function elevateBoot(qqPath, uin) {
   return String(await runPwsh(script, 90000)).trim();
 }
 
+// ── 缺网关时一键装 ─────────────────────────────────────
+// 按 SnowLuma 的 EULA，公开分发的包不能把网关打进来（构建时 --no-gateway），
+// 所以别人的包里 snowluma\ 是空的，面板上只有一段「自己去 GitHub 下载解压」的说明。
+// 对不熟电脑的人是道坎，这里直接代下代装：下完整版（自带 node.exe，不用先装 Node）。
+const SNOWLUMA_RELEASE_API = 'https://api.github.com/repos/SnowLuma/SnowLuma/releases/latest';
+
+async function installGateway() {
+  if (fs.existsSync(path.join(SNOWLUMA_DIR, 'index.mjs'))) {
+    return { ok: true, already: true, version: snowlumaVersion() };
+  }
+  if (children.snowluma) await stopSnowLuma();
+
+  const res = await fetch(SNOWLUMA_RELEASE_API, {
+    headers: { 'user-agent': 'qq-bot-panel', accept: 'application/vnd.github+json' },
+    signal: AbortSignal.timeout(20000)
+  });
+  if (!res.ok) throw new Error(`查 SnowLuma 最新版失败：HTTP ${res.status}`);
+  const rel = await res.json();
+  const asset = (rel.assets || []).find((a) => /win-x64\.zip$/i.test(a.name) && !/lite/i.test(a.name));
+  if (!asset) throw new Error('这个版本没有 Windows x64 完整包，只能去 Releases 手动下载');
+
+  const dir = path.join(STATE_DIR, 'snowluma-setup');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const zip = path.join(dir, 'snowluma.zip');
+  const bytes = await fetchToFile(asset.browser_download_url, zip);
+  log(`网关下载完成：${(bytes / 1048576).toFixed(1)} MB，开始解压…`);
+
+  const stage = path.join(dir, 'unpacked');
+  const q = (s) => s.replace(/'/g, "''");
+  await runPwsh(`Expand-Archive -LiteralPath '${q(zip)}' -DestinationPath '${q(stage)}' -Force`);
+  // 压缩包根目录可能多套一层。
+  let root = stage;
+  if (!fs.existsSync(path.join(root, 'index.mjs'))) {
+    for (const d of fs.readdirSync(stage, { withFileTypes: true })) {
+      if (d.isDirectory() && fs.existsSync(path.join(stage, d.name, 'index.mjs'))) {
+        root = path.join(stage, d.name);
+        break;
+      }
+    }
+  }
+  if (!fs.existsSync(path.join(root, 'index.mjs'))) throw new Error('解压后没找到 index.mjs，可能不是 SnowLuma 包');
+
+  // 旧目录里的 config/ data/ logs/ 是登录态和设置，换版本时留着。
+  const keep = ['config', 'data', 'logs'];
+  const saved = [];
+  if (fs.existsSync(SNOWLUMA_DIR)) {
+    for (const name of keep) {
+      const p = path.join(SNOWLUMA_DIR, name);
+      if (fs.existsSync(p)) saved.push([name, p]);
+    }
+    const backup = `${SNOWLUMA_DIR}.old-${Date.now()}`;
+    fs.renameSync(SNOWLUMA_DIR, backup);
+    fs.rmSync(backup, { recursive: true, force: true });
+  }
+  fs.cpSync(root, SNOWLUMA_DIR, { recursive: true });
+  for (const [name, from] of saved) {
+    const to = path.join(SNOWLUMA_DIR, name);
+    fs.rmSync(to, { recursive: true, force: true });
+    fs.cpSync(from, to, { recursive: true });
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+  try { fs.rmSync(UPDATE_CACHE, { force: true }); } catch { /* 缓存删不掉不影响 */ }
+
+  const version = snowlumaVersion();
+  log(`SnowLuma 装好了：${version || rel.tag_name}`);
+  return { ok: true, version, tag: rel.tag_name, sizeMB: Math.round(bytes / 1048576) };
+}
+
 async function fetchToFile(url, file) {
   const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(240000) });
   if (!res.ok) throw new Error('下载失败 HTTP ' + res.status);
@@ -1584,6 +1653,14 @@ const server = http.createServer(async (req, res) => {
           });
         });
         return json(res, 200, { ...result, ms: Date.now() - started });
+      }
+      // 缺网关的包（--no-gateway）用这个接口代下代装。
+      if (req.method === 'POST' && sub === 'gateway/install') {
+        try {
+          return json(res, 200, await installGateway());
+        } catch (e) {
+          return json(res, 500, { ok: false, error: e.message });
+        }
       }
       // snowluma/* 是旧名字，保留着兼容老页面和外部脚本；实际按 config.gateway 分派。
       if (req.method === 'POST' && (sub === 'snowluma/start' || sub === 'gateway/start')) {
