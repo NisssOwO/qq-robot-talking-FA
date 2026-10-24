@@ -63,7 +63,9 @@ const DEFAULTS = {
   // 停用的号挪到 disabled 里，网关侧判断逻辑一行都不用改。
   allow: { groups: [], private: [], disabled: { groups: [], private: [] }, names: {} },
   // QQ 本体：网关要注入到一个正在运行的 QQ 上，所以这里记住它装在哪、要不要顺手拉起来。
-  qq: { path: '', autoLaunch: true },
+  qq: { path: '', uin: '', autoLaunch: true },
+  // 协议端：只支持 SnowLuma（内置 NapCat 那条路已回滚，代码留着但不启用）。
+  gateway: 'snowluma',
   backend: 'standalone',
   consolePort: 3100
 };
@@ -149,12 +151,23 @@ function cleanDisplayIcon(raw) {
   return String(raw ?? '').trim().replace(/^"|"$/g, '').replace(/,\s*-?\d+$/, '').trim();
 }
 
+// 注册表有时候给的是卸载器（Uninstall.exe）或图标文件，不是主程序。
+// 一律落回「同一目录下的 QQ.exe」；实在没有才退回原值，交给上层再判存在性。
+function normalizeQQExe(raw) {
+  const exe = cleanDisplayIcon(raw);
+  if (!exe) return '';
+  if (/[\\/]qq\.exe$/i.test(exe) && fs.existsSync(exe)) return exe;
+  const sibling = path.join(path.dirname(exe), 'QQ.exe');
+  if (fs.existsSync(sibling)) return sibling;
+  return exe;
+}
+
 function readQQFromRegistry() {
   return new Promise((resolve) => {
-    const script = `foreach ($k in @('HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QQ','HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QQ','HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QQ')) { if (Test-Path $k) { $v = (Get-ItemProperty $k -ErrorAction SilentlyContinue).DisplayIcon; if ($v) { $v; break } } }`;
+    const script = `foreach ($k in @('HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QQ','HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QQ','HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QQ')) { if (Test-Path $k) { $p = Get-ItemProperty $k -ErrorAction SilentlyContinue; if ($p.DisplayIcon) { $p.DisplayIcon; break }; if ($p.UninstallString) { $p.UninstallString; break } } }`;
     execFile('powershell', ['-NoProfile', '-Command', script], { windowsHide: true }, (error, stdout) => {
       if (error) return resolve('');
-      resolve(cleanDisplayIcon(String(stdout ?? '').split(/\r?\n/)[0]));
+      resolve(normalizeQQExe(String(stdout ?? '').split(/\r?\n/)[0]));
     });
   });
 }
@@ -162,7 +175,8 @@ function readQQFromRegistry() {
 // 探测顺序：正在跑的 QQ → 配置里存的 → 注册表。用户自定义安装（比如 F:\QQNT）只能靠前两者。
 async function detectQQPath(cfg, procs) {
   const list = procs ?? (await listQQProcesses());
-  const running = list.find((p) => p.path && fs.existsSync(p.path));
+  // 只认真正的主程序：QQ 还会起 QQProtect 之类的进程，路径判错就会去注入错的目标。
+  const running = list.find((p) => p.path && /[\\/]QQ\.exe$/i.test(p.path) && fs.existsSync(p.path));
   if (running) return running.path;
   const configured = String(cfg?.qq?.path ?? '').trim();
   if (configured && fs.existsSync(configured)) return configured;
@@ -254,28 +268,644 @@ function readSocialToday(cfg) {
   };
 }
 
+
+// ── NapCat（QQ 协议端）──────────────────────────────────────────
+// NapCat 是注入 QQ 客户端的 hook，靠 QQ 本身登录，所以 QQ 必须装、必须开。
+// 许可允许随本程序分发 NapCat，但 QQ 是腾讯的商业软件，不能带 —— 缺 QQ 时给官网链接。
+const NAPCAT_DIR = path.join(ROOT, 'napcat');
+const NAPCAT_WEBCONFIG = path.join(NAPCAT_DIR, 'config', 'webui.json');
+const NAPCAT_QRCODE = path.join(NAPCAT_DIR, 'cache', 'qrcode.png');
+const NAPCAT_WEBUI_PORT = 6099;
+const QQ_DOWNLOAD_URL = 'https://im.qq.com/pcqq';
+const NAPCAT_BOOT = path.join(NAPCAT_DIR, 'NapCatWinBootMain.exe');
+const NAPCAT_HOOK = path.join(NAPCAT_DIR, 'NapCatWinBootHook.dll');
+
+let qqPathCache = { at: 0, path: '' };
+
+// 找 QQ 装在哪：先看配置，再看注册表（QQ 安装器会写 UninstallString）。
+async function findQQPath() {
+  if (Date.now() - qqPathCache.at < 60000) return qqPathCache.path;
+  // 顺序交给 detectQQPath：正在跑的 QQ → 配置 → 注册表。
+  // 这里以前自己再查一次 UninstallString，拿到的是 Uninstall.exe，注入器直接跑错。
+  const found = await detectQQPath(readConfig());
+  qqPathCache = { at: Date.now(), path: found };
+  return found;
+}
+
+function napcatInstalled() {
+  return fs.existsSync(NAPCAT_BOOT) && fs.existsSync(NAPCAT_HOOK);
+}
+
+// 二维码：NapCat 无头运行，码打在控制台里同时落盘。读出 base64 给面板显示。
+function readQrcode() {
+  try {
+    const st = fs.statSync(NAPCAT_QRCODE);
+    if (Date.now() - st.mtimeMs > 180000) return null; // 3 分钟前的码不给了
+    return { base64: fs.readFileSync(NAPCAT_QRCODE).toString('base64'), at: st.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
+// 读 WebUI 的 token，用它换算登录凭证（sha256(token + ".napcat")）。
+function napcatToken() {
+  try {
+    const j = JSON.parse(fs.readFileSync(NAPCAT_WEBCONFIG, 'utf8'));
+    return String(j.token ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
+async function napcatLoginStatus() {
+  const token = napcatToken();
+  const webui = await probePort(NAPCAT_WEBUI_PORT);
+  if (!token || !webui) return { webui, isLogin: false, loginPhase: '', loginError: '' };
+  const key = crypto.createHash('sha256').update(token + '.napcat').digest('hex');
+  const call = (p, body) =>
+    fetch('http://127.0.0.1:' + NAPCAT_WEBUI_PORT + p, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(body.__cred ? { authorization: 'Bearer ' + body.__cred } : {}) },
+      body: JSON.stringify(body.data ?? {}),
+      signal: AbortSignal.timeout(6000)
+    }).then((r) => r.json());
+  try {
+    const login = await call('/api/auth/login', { data: { hash: key } });
+    const cred = login?.data?.Credential;
+    if (!cred) return { webui, isLogin: false, loginPhase: '', loginError: '登录 WebUI 失败' };
+    const st = await call('/api/QQLogin/CheckLoginStatus', { __cred: cred, data: {} });
+    const d = st?.data ?? {};
+    return { webui, isLogin: !!d.isLogin, loginPhase: String(d.loginPhase ?? ''), loginError: String(d.loginError ?? '') };
+  } catch (error) {
+    return { webui, isLogin: false, loginPhase: '', loginError: String(error?.message ?? error) };
+  }
+}
+
+async function gatewayInfo() {
+  const cfg = readConfig();
+  const gateway = cfg?.gateway === 'snowluma' ? 'snowluma' : 'napcat';
+  const qqPath = await findQQPath();
+  const [onebotWs, onebotHttp] = await Promise.all([probePort(ONEBOT_WS_PORT), probePort(ONEBOT_HTTP_PORT)]);
+  const login = gateway === 'napcat' ? await napcatLoginStatus() : { webui: false, isLogin: false, loginPhase: '', loginError: '' };
+  // NapCat 的登录态要过 WebUI 认证才查得到，token 一变就查不出来；
+  // 但 OneBot 服务只有在 QQ 登录成功后才会起来，所以 ws 通就等于登录成功——
+  // 否则界面会一直显示「正在出二维码」，而实际上 QQ 早在线上。
+  const loggedIn = login.isLogin || onebotWs;
+  return {
+    ok: true,
+    gateway,
+    qq: { installed: !!qqPath, path: qqPath, downloadUrl: QQ_DOWNLOAD_URL },
+    napcat: {
+      installed: napcatInstalled(),
+      running: onebotWs || login.webui,
+      webui: login.webui,
+      isLogin: loggedIn,
+      loginPhase: login.loginPhase,
+      loginError: login.loginError,
+      qrcode: loggedIn ? null : readQrcode()
+    },
+    onebot: { http: onebotHttp, ws: onebotWs }
+  };
+}
+
+// ── 版本与兼容性 ────────────────────────────────────────
+// NapCat 不是通用协议端：它是按某个 QQ 版本做的 hook（napcat\qqnt.json 里的 version）。
+// QQ 客户端一升级，hook 就可能对不上，表现是扫码不弹、连上就断、或者 QQ 起不来。
+// 面板把「内置 NapCat 版本 / 它适配的 QQ 版本 / 本机 QQ 版本 / 最新 NapCat」摆在一起，
+// 出问题时用户能直接看出是不是版本错位，而不是对着黑窗猜。
+const NAPCAT_QQNT_FILE = path.join(NAPCAT_DIR, 'qqnt.json');
+const NAPCAT_UPDATE_CACHE = path.join(STATE_DIR, 'napcat-update.json');
+const NAPCAT_RELEASE_API = 'https://api.github.com/repos/NapNeko/NapCatQQ/releases/latest';
+const UPDATE_CHECK_INTERVAL = 6 * 60 * 60 * 1000;
+
+// 版本号比较：按 . 和 - 切段，缺位补 0。9.9.36 > 9.9.22，9.9.36-53644 > 9.9.36。
+function cmpVersion(a, b) {
+  const pa = String(a ?? '').split(/[.\-+]/).map((x) => parseInt(x, 10) || 0);
+  const pb = String(b ?? '').split(/[.\-+]/).map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
+// 内置 NapCat 的版本号：优先 VERSION 文件（构建时写），否则从 bundle 里取那个常量。
+function napcatVersion() {
+  try {
+    const file = path.join(NAPCAT_DIR, 'VERSION');
+    if (fs.existsSync(file)) {
+      const v = String(fs.readFileSync(file, 'utf8')).trim().split(/\r?\n/)[0].trim();
+      if (/^\d+\.\d+\.\d+/.test(v)) return v;
+    }
+  } catch { /* 落到下面用 bundle 兜底 */ }
+  try {
+    // bundle 里是 `typeof x < "u" && "4.18.41" || "1.0.0-dev"` 这种形态，只命中一次。
+    const s = fs.readFileSync(path.join(NAPCAT_DIR, 'napcat.mjs'), 'utf8');
+    const m = s.match(/&&\s*"(\d+\.\d+\.\d+)"/);
+    return m ? m[1] : '';
+  } catch {
+    return '';
+  }
+}
+
+// ── 版本与更新 ────────────────────────────────────────────────────────────
+// 两条线各查各的：本程序自己（GitHub Release）和协议端 SnowLuma（GitHub Release）。
+// 都带 6 小时缓存，查不到不算失败——国内网络连不上 GitHub 是常态，不能因此让面板报错。
+const APP_MANIFEST = path.join(ROOT, 'package.json');
+const UPDATE_CACHE = path.join(STATE_DIR, 'update-cache.json');
+const UPDATE_RELEASES = {
+  app: 'https://api.github.com/repos/NisssOwO/qq-robot-talking-FA/releases/latest',
+  snowluma: 'https://api.github.com/repos/SnowLuma/SnowLuma/releases/latest'
+};
+
+function appVersion() {
+  // 发布包里没有 package.json（构建只拷运行需要的东西），所以版本号放一个 VERSION 文件；
+  // 源码目录则直接读 package.json。
+  try {
+    const v = String(fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8')).trim().split(/\r?\n/)[0].trim();
+    if (v) return v;
+  } catch { /* 没有 VERSION 就退回 package.json */ }
+  try {
+    return String(JSON.parse(fs.readFileSync(APP_MANIFEST, 'utf8')).version ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function readUpdateCache() {
+  try {
+    return JSON.parse(fs.readFileSync(UPDATE_CACHE, 'utf8')) || {};
+  } catch {
+    return {};
+  }
+}
+
+function writeUpdateCache(cache) {
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(UPDATE_CACHE, JSON.stringify(cache, null, 2), 'utf8');
+  } catch { /* 缓存写不了不影响功能，下次再查 */ }
+}
+
+async function cachedRelease(key, force = false) {
+  const url = UPDATE_RELEASES[key];
+  if (!url) return { version: '', url: '', error: 'unknown' };
+  const cache = readUpdateCache();
+  const hit = cache[key];
+  if (!force && hit && Date.now() - (hit.checkedAt || 0) < UPDATE_CHECK_INTERVAL) return hit;
+  // GitHub 在国内时通时不通，失败一次不算数，隔 400ms 再试一遍。
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (attempt) await new Promise((r) => setTimeout(r, 400));
+    try {
+      const res = await fetch(url, {
+        headers: { 'user-agent': 'qq-bridge', accept: 'application/vnd.github+json' },
+        signal: AbortSignal.timeout(8000)
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.json();
+      const entry = {
+        version: String(body.tag_name ?? '').replace(/^v/i, '').trim(),
+        url: String(body.html_url ?? ''),
+        checkedAt: Date.now(),
+        error: ''
+      };
+      cache[key] = entry;
+      writeUpdateCache(cache);
+      return entry;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  // 失败时保留上次成功的版本号，只把错误记下来，免得界面从「已是最新」突然变成空白。
+  const entry = { ...(hit || { version: '', url: '' }), error: String(lastError?.message ?? lastError), checkedAt: hit?.checkedAt || 0 };
+  cache[key] = entry;
+  writeUpdateCache(cache);
+  return entry;
+}
+
+function snowlumaVersion() {
+  try {
+    return String(JSON.parse(fs.readFileSync(path.join(SNOWLUMA_DIR, 'package.json'), 'utf8')).version ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
+// QQ 升级后 SnowLuma 的 hook 可能跟不上，这是这套方案最常见的静默失效。
+// 记下每次看到的 QQ 版本，变过就告诉用户「升级过，出问题时先怀疑 hook」。
+const QQ_BASELINE = path.join(STATE_DIR, 'qq-baseline.json');
+
+function readQQBaseline() {
+  try {
+    return JSON.parse(fs.readFileSync(QQ_BASELINE, 'utf8')) || {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberQQVersion(version) {
+  const cur = readQQBaseline();
+  if (!version || cur.version === version) return cur;
+  const next = { version, previous: String(cur.version ?? ''), changedAt: Date.now() };
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(QQ_BASELINE, JSON.stringify(next, null, 2), 'utf8');
+  } catch { /* 记不下来就只是少一个提示 */ }
+  return next;
+}
+
+async function updateInfo({ force = false } = {}) {
+  const cfg = readConfig();
+  const qqPath = await detectQQPath(cfg);
+  const qqNow = installedQQVersion(qqPath);
+  const baseline = rememberQQVersion(qqNow);
+  const [appRelease, snowRelease] = await Promise.all([cachedRelease('app', force), cachedRelease('snowluma', force)]);
+
+  const now = appVersion();
+  const sl = snowlumaVersion();
+  return {
+    ok: true,
+    app: {
+      version: now,
+      latest: appRelease.version || '',
+      url: appRelease.url || 'https://github.com/Derpyu520/qq-bridge/releases',
+      checkedAt: appRelease.checkedAt || 0,
+      error: appRelease.error || '',
+      updateAvailable: !!(now && appRelease.version && cmpVersion(now, appRelease.version) < 0)
+    },
+    snowluma: {
+      version: sl,
+      installed: !!sl,
+      latest: snowRelease.version || '',
+      url: snowRelease.url || 'https://github.com/SnowLuma/SnowLuma/releases',
+      error: snowRelease.error || '',
+      updateAvailable: !!(sl && snowRelease.version && cmpVersion(sl, snowRelease.version) < 0)
+    },
+    qq: {
+      version: qqNow,
+      path: qqPath,
+      previous: String(baseline.previous ?? ''),
+      changed: !!(baseline.previous && qqNow && baseline.previous !== qqNow)
+    }
+  };
+}
+
+// NapCat 这一版是按哪个 QQ 版本适配的（qqnt.json 就是喂给 Electron 的伪 package.json）。
+function napcatTargetQQ() {
+  try {
+    const j = JSON.parse(fs.readFileSync(NAPCAT_QQNT_FILE, 'utf8'));
+    return { version: String(j.version ?? ''), buildVersion: String(j.buildVersion ?? ''), verHash: String(j.verHash ?? '') };
+  } catch {
+    return { version: '', buildVersion: '', verHash: '' };
+  }
+}
+
+// 本机 QQ 的版本：NTQQ 把每个版本放在 `<QQ 目录>\versions\<版本号>\`，取最新那个。
+// 只比对主版本段（9.9.36-53644 → 9.9.36），后面那段是构建号。
+function installedQQVersion(qqPath) {
+  const base = path.dirname(String(qqPath || ''));
+  if (!base || base === '.') return '';
+  const candidates = [];
+  const vdir = path.join(base, 'versions');
+  try {
+    for (const name of fs.readdirSync(vdir)) {
+      if (/^\d+\.\d+\.\d+/.test(name)) candidates.push(name);
+    }
+  } catch { /* 不是标准安装布局就看下面的 */ }
+  if (!candidates.length) return '';
+  candidates.sort(cmpVersion);
+  return candidates[candidates.length - 1];
+}
+
+// 查最新版：6 小时内用缓存；查不到就退回旧缓存，绝不让面板卡住。
+async function latestNapcatRelease(force = false) {
+  let cache = {};
+  try { cache = JSON.parse(fs.readFileSync(NAPCAT_UPDATE_CACHE, 'utf8')) || {}; } catch { cache = {}; }
+  if (!force && cache.at && Date.now() - cache.at < UPDATE_CHECK_INTERVAL) return cache;
+  try {
+    const res = await fetch(NAPCAT_RELEASE_API, {
+      headers: { accept: 'application/vnd.github+json', 'user-agent': 'qq-bot-panel' },
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    const assets = Array.isArray(j.assets) ? j.assets : [];
+    const out = {
+      at: Date.now(),
+      tag: String(j.tag_name ?? ''),
+      version: String(j.tag_name ?? '').replace(/^v/i, ''),
+      name: String(j.name ?? ''),
+      url: String(j.html_url ?? ''),
+      // 面板只做「提示 + 给链接」，不自动替换 23MB 的目录：换目录要停进程，出错代价太大。
+      downloadUrl: assets.find((a) => a.name === 'NapCat.Shell.zip')?.browser_download_url ?? ''
+    };
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(NAPCAT_UPDATE_CACHE, JSON.stringify(out, null, 2), 'utf8');
+    return out;
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    return { ...cache, error: message, checkedAt: cache.at ?? null };
+  }
+}
+
+async function versionInfo({ force = false } = {}) {
+  const qqPath = await findQQPath();
+  const local = napcatVersion();
+  const target = napcatTargetQQ();
+  const qqFull = installedQQVersion(qqPath);
+  const qq = qqFull.split('-')[0];
+  const latest = await latestNapcatRelease(force);
+  // compat 只说「QQ 和 NapCat 适配的版本对不对得上」，running 与否另算。
+  let compat = 'unknown';
+  if (qq && target.version) {
+    const d = cmpVersion(qq, target.version);
+    compat = d === 0 ? 'match' : d > 0 ? 'newer' : 'older';
+  }
+  return {
+    ok: true,
+    napcat: { version: local, dir: NAPCAT_DIR, targetQQ: target.version, targetBuild: target.buildVersion, targetHash: target.verHash },
+    qq: { version: qq, full: qqFull, path: qqPath },
+    latest: {
+      version: String(latest.version ?? ''),
+      url: String(latest.url ?? ''),
+      downloadUrl: String(latest.downloadUrl ?? ''),
+      checkedAt: latest.at ?? latest.checkedAt ?? null,
+      error: String(latest.error ?? '')
+    },
+    updateAvailable: Boolean(latest.version && local && cmpVersion(latest.version, local) > 0),
+    compat
+  };
+}
+
+// ── 一键更新 NapCat ───────────────────────────────────────────────
+// 换的是「程序」，保留 config\（登录态），所以换完不用重新扫码。
+// 但 hook 的 dll 是注入进 QQ 进程的：QQ 不退就删不掉旧目录，必须先全退。
+const NAPCAT_UPDATE_DIR = path.join(STATE_DIR, 'napcat-update');
+
+function countProcess(name) {
+  return new Promise((resolve) => {
+    execFile('powershell', ['-NoProfile', '-Command', `(Get-Process -Name '${name}' -ErrorAction SilentlyContinue | Measure-Object).Count`], { windowsHide: true }, (error, stdout) => {
+      if (error) return resolve(0);
+      resolve(Number(String(stdout ?? '').trim()) || 0);
+    });
+  });
+}
+
+function killByImage(name) {
+  return new Promise((resolve) => {
+    execFile('taskkill', ['/IM', name, '/T', '/F'], { windowsHide: true }, () => resolve());
+  });
+}
+
+function runPwsh(script, timeout = 240000) {
+  return new Promise((resolve, reject) => {
+    execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout }, (error, stdout, stderr) => {
+      if (error) reject(new Error(String(stderr || stdout || error.message).trim().slice(0, 400)));
+      else resolve(String(stdout ?? ''));
+    });
+  });
+}
+
+function psq(value) {
+  return "'" + String(value).replace(/'/g, "''") + "'";
+}
+
+// 面板自己是不是管理员。NapCat 的启动器一开始就查这个（launcher.bat 里的 net session），
+// 不是管理员它会自己提权重开，就是因为它必须提权才能干活。
+async function isElevated() {
+  try {
+    const out = await runPwsh(
+      '([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
+      15000
+    );
+    return String(out).trim().toLowerCase() === 'true';
+  } catch {
+    return false;
+  }
+}
+
+// 提权跑注入器：Start-Process -Verb RunAs 会弹一次 UAC，用户点「是」之后
+// 新进程继承这里的环境变量（Start-Process 默认继承），所以五个 NAPCAT_* 照样带过去。
+async function elevateBoot(qqPath, uin) {
+  const env = [
+    ['NAPCAT_PATCH_PACKAGE', path.join(NAPCAT_DIR, 'qqnt.json')],
+    ['NAPCAT_LOAD_PATH', path.join(NAPCAT_DIR, 'loadNapCat.js')],
+    ['NAPCAT_INJECT_PATH', NAPCAT_HOOK],
+    ['NAPCAT_LAUNCHER_PATH', NAPCAT_BOOT],
+    ['NAPCAT_MAIN_PATH', path.join(NAPCAT_DIR, 'napcat.mjs')]
+  ]
+    .map(([key, value]) => `$env:${key}=${psq(value)}`)
+    .join('; ');
+
+  const bootArgs = [qqPath, NAPCAT_HOOK, uin].filter(Boolean).map(psq).join(' ');
+  const inner = env + `; & ${psq(NAPCAT_BOOT)} ${bootArgs} *> ${psq(path.join(STATE_DIR, 'napcat.log'))}`;
+  const encoded = Buffer.from(inner, 'utf16le').toString('base64');
+  const script =
+    "Start-Process -FilePath 'powershell.exe' -Verb RunAs -PassThru " +
+    `-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',${psq(encoded)}) ` +
+    '| ForEach-Object { $_.Id }';
+  return String(await runPwsh(script, 90000)).trim();
+}
+
+async function fetchToFile(url, file) {
+  const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(240000) });
+  if (!res.ok) throw new Error('下载失败 HTTP ' + res.status);
+  const buf = Buffer.from(await res.arrayBuffer());
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, buf);
+  return buf.length;
+}
+
+async function updateNapCat() {
+  const rel = await latestNapcatRelease(true);
+  if (!rel?.version) throw new Error(rel?.error || '查不到最新版本');
+  if (!rel.downloadUrl) throw new Error('最新版没有 Windows 的 Shell 包');
+  const from = napcatVersion();
+  if (from && cmpVersion(rel.version, from) <= 0) return { ok: true, changed: false, from, to: rel.version };
+
+  try { await stopGateway(); } catch { /* 本来就没在跑 */ }
+  for (let i = 0; i < 12; i += 1) {
+    if (!(await countProcess('QQ'))) break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  if (await countProcess('QQ')) {
+    throw new Error('QQ 还开着。NapCat 的 dll 被 QQ 进程占着，替换一定失败——请先完全退出 QQ（含右下角托盘图标）再点更新。');
+  }
+
+  const dir = NAPCAT_UPDATE_DIR;
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const zip = path.join(dir, 'napcat.zip');
+  const bytes = await fetchToFile(rel.downloadUrl, zip);
+
+  const stage = path.join(dir, 'unpacked');
+  const q = (s) => s.replace(/'/g, "''");
+  await runPwsh(`Expand-Archive -LiteralPath '${q(zip)}' -DestinationPath '${q(stage)}' -Force`);
+  // 不同版本的压缩包，根目录可能多一层。
+  let root = stage;
+  if (!fs.existsSync(path.join(root, 'napcat.mjs'))) {
+    for (const d of fs.readdirSync(stage, { withFileTypes: true })) {
+      if (d.isDirectory() && fs.existsSync(path.join(stage, d.name, 'napcat.mjs'))) {
+        root = path.join(stage, d.name);
+        break;
+      }
+    }
+  }
+  if (!fs.existsSync(path.join(root, 'napcat.mjs'))) throw new Error('包里没找到 napcat.mjs，这可能不是 Windows Shell 包');
+
+  const cfgDir = path.join(NAPCAT_DIR, 'config');
+  const backup = path.join(dir, 'config-backup');
+  if (fs.existsSync(cfgDir)) fs.cpSync(cfgDir, backup, { recursive: true });
+
+  const old = path.join(dir, 'old');
+  try {
+    if (fs.existsSync(NAPCAT_DIR)) fs.renameSync(NAPCAT_DIR, old);
+  } catch (error) {
+    throw new Error('换不掉：旧 napcat 目录被占用（' + String(error?.message ?? error) + '）。确认 QQ 和网关都退干净了再试。');
+  }
+  fs.cpSync(root, NAPCAT_DIR, { recursive: true });
+  if (fs.existsSync(backup)) fs.cpSync(backup, cfgDir, { recursive: true });
+  fs.writeFileSync(path.join(NAPCAT_DIR, 'VERSION'), String(rel.version) + '\n', 'utf8');
+  fs.rmSync(old, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true });
+  return { ok: true, changed: true, from, to: rel.version, bytes };
+}
+
+// 启动 NapCat：先确认 NapCat 与 QQ 都在，再拉起注入器（它会启动 QQ 并挂 hook）。
+async function startNapCat() {
+  if (!napcatInstalled()) {
+    return { ok: false, code: 'napcat-missing', error: '没有找到 napcat：' + NAPCAT_DIR, hint: '安装包应当自带 napcat 目录' };
+  }
+  if (await probePort(ONEBOT_WS_PORT)) return { ok: true, already: true, external: true };
+  const qqPath = await findQQPath();
+  if (!qqPath) {
+    return {
+      ok: false,
+      code: 'qq-missing',
+      error: '没有找到 QQ：NapCat 要先把 hook 注入 QQ 才能工作',
+      hint: QQ_DOWNLOAD_URL
+    };
+  }
+  const cfg = readConfig();
+  const uin = String(cfg?.qq?.uin ?? '').trim();
+
+  // 残留的注入器要先清掉：点多次「启动网关」会堆出好几个 NapCatWinBootMain，
+  // 它们各自去拉 QQ，两个实例抢同一批文件时 QQ 就会弹「文件已损坏」。
+  if (await countProcess('NapCatWinBootMain')) {
+    await killByImage('NapCatWinBootMain.exe');
+    await new Promise((r) => setTimeout(r, 600));
+  }
+
+  // QQ 自己已经开着时也不能再让注入器拉一个：NapCat 的用法是「它来启动 QQ」，
+  // 已运行的实例会占着 dll，新实例起来就在校验阶段报文件损坏。
+  const qqRunning = await countProcess('QQ');
+  if (qqRunning) {
+    log('启动前先关掉正在运行的 QQ（' + qqRunning + ' 个进程）');
+    await killByImage('QQ.exe');
+    for (let i = 0; i < 12; i += 1) {
+      if (!(await countProcess('QQ'))) break;
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+
+  // NapCat 官方要求管理员：launcher.bat 一上来就 net session 检查，不是管理员就自己提权重跑。
+  // 原因是它要往 QQ 的 resources\app 里写 package.json、还要把 dll 注入到高完整性进程；
+  // 普通权限下注入器能把 QQ 拉起来，hook dll 也注得进去，但 patch 写不进去 ——
+  // 现象就是 QQ 起来了（进程还起不全），38000/38001/6099 一个都不开。
+  if (!(await isElevated())) {
+    const pid = await elevateBoot(qqPath, uin);
+    children.napcat = null;
+    log('NapCat 需要管理员权限，已请求提权（pid ' + pid + '，QQ: ' + qqPath + '）');
+    return { ok: true, pid: Number(pid) || null, qq: qqPath, restartedQQ: qqRunning > 0, elevated: true };
+  }
+
+  const args = [qqPath, NAPCAT_HOOK];
+  if (uin) args.push(uin); // 传了账号才会走快速登录，否则每次都要扫码
+  // 这五个环境变量是 NapCat 的启动器认路用的：少了它们，注入器照样能把 QQ 拉起来，
+  // 但不知道该在 QQ 里塞哪个 loadNapCat.js、用哪个 patch 包，结果就是 QQ 起来了、端口一个都不开。
+  // 官方 launcher.bat 里也是这么一组，照抄。
+  const env = {
+    ...process.env,
+    NAPCAT_PATCH_PACKAGE: path.join(NAPCAT_DIR, 'qqnt.json'),
+    NAPCAT_LOAD_PATH: path.join(NAPCAT_DIR, 'loadNapCat.js'),
+    NAPCAT_INJECT_PATH: NAPCAT_HOOK,
+    NAPCAT_LAUNCHER_PATH: NAPCAT_BOOT,
+    NAPCAT_MAIN_PATH: path.join(NAPCAT_DIR, 'napcat.mjs')
+  };
+  const out = fs.openSync(path.join(STATE_DIR, 'napcat.log'), 'a');
+  const child = spawn(NAPCAT_BOOT, args, { cwd: NAPCAT_DIR, stdio: ['ignore', out, out], detached: true, windowsHide: true, env });
+  child.unref();
+  children.napcat = child;
+  rememberPid('napcat', child.pid);
+  log('NapCat 已启动（pid ' + child.pid + '，QQ: ' + qqPath + '）');
+  return { ok: true, pid: child.pid, qq: qqPath, restartedQQ: qqRunning > 0 };
+}
+
+async function stopNapCat() {
+  // 注入器是 NapCatWinBootMain.exe，不是 node 进程：findOwnPids 按命令行找 node 的方式碰不到它，
+  // 必须按镜像名杀，否则网关显示停了、实际还挂着，下次启动就两个实例打架。
+  const before = await countProcess('NapCatWinBootMain');
+  if (before) await killByImage('NapCatWinBootMain.exe');
+  if (children.napcat && !children.napcat.killed) {
+    try { children.napcat.kill(); } catch {}
+  }
+  children.napcat = null;
+  return { ok: true, stopped: before };
+}
+
+// 协议端只有一个入口：面板上所有「启动/停止网关」都走这里，按 config.gateway 分派。
+// 否则用户把网关切成 NapCat 之后，旧按钮还在拉 SnowLuma。
+function gatewayKind() {
+  // 回滚后只有 SnowLuma 一种协议端；保留这个函数是因为端口、目录都要跟着它走。
+  return 'snowluma';
+}
+
+async function startGateway() {
+  return gatewayKind() === 'snowluma' ? startSnowLuma() : startNapCat();
+}
+
+async function stopGateway() {
+  return gatewayKind() === 'snowluma' ? stopSnowLuma() : stopNapCat();
+}
+
 async function status() {
+  const cfg = readConfig();
+  // 两个网关的 WebUI 端口不同（SnowLuma 5099 / NapCat 6099），只探当前选中的那个，
+  // 界面上的「网关页面」一栏才不会被另一个网关的端口带偏。
+  const kind = gatewayKind(cfg);
+  const gwWebuiPort = kind === 'snowluma' ? WEBUI_PORT : NAPCAT_WEBUI_PORT;
   const [webui, onebotHttp, onebotWs] = await Promise.all([
-    probePort(WEBUI_PORT),
+    probePort(gwWebuiPort),
     probePort(ONEBOT_HTTP_PORT),
     probePort(ONEBOT_WS_PORT)
   ]);
-  const cfg = readConfig();
   const botAlive = children.bot && !children.bot.killed ? true : await probePort(Number(cfg?.consolePort ?? 3100), 500);
   const qqProcs = await listQQProcesses();
   const qqConfigured = String(cfg?.qq?.path ?? '').trim();
+  // 网关装没装、目录、pid 都按当前选择取，别把 SnowLuma 的状态套到 NapCat 上。
+  const gwInstalled = kind === 'snowluma' ? fs.existsSync(path.join(SNOWLUMA_DIR, 'index.mjs')) : napcatInstalled();
+  const gwPid = (kind === 'snowluma' ? children.snowluma : children.napcat)?.pid ?? null;
+  const gatewayState = {
+    kind,
+    label: kind === 'snowluma' ? 'SnowLuma' : 'NapCat',
+    running: onebotWs || webui,
+    webui,
+    webuiPort: gwWebuiPort,
+    webuiUrl: 'http://127.0.0.1:' + gwWebuiPort + '/',
+    onebotHttp,
+    onebotWs,
+    installed: gwInstalled,
+    dir: kind === 'snowluma' ? SNOWLUMA_DIR : NAPCAT_DIR,
+    // 面板自己拉起来的进程才有 pid；外部已经在跑时是 null，界面上标「外部进程」。
+    pid: gwPid,
+    // NapCat 靠注入 QQ 工作；QQ 没开时灯是黄的而不是绿。
+    needsQQ: kind === 'napcat'
+  };
   return {
-    snowluma: {
-      running: onebotWs || webui,
-      webui,
-      onebotHttp,
-      onebotWs,
-      // 没装网关（发布包按许可要求不带它）时界面要给出下载指引，而不是只说"启动失败"。
-      installed: fs.existsSync(path.join(SNOWLUMA_DIR, 'index.mjs')),
-      dir: SNOWLUMA_DIR,
-      // 面板自己拉起来的进程才有 pid；外部已经在跑时是 null，界面上标「外部进程」。
-      pid: children.snowluma?.pid ?? null
-    },
+    // 新键：界面一律读它。snowluma 保留成同一份内容，避免旧页面/旧调用方拿到 undefined。
+    gateway: gatewayState,
+    snowluma: gatewayState,
     bot: { running: !!botAlive, pid: children.bot?.pid ?? null },
     // QQ 本体：网关靠注入它工作，所以面板要能把「装在哪、开没开」摆出来。
     qq: {
@@ -315,6 +945,8 @@ async function status() {
             baseURL: cfg.webSearch?.baseURL ?? ''
           },
           gateway: {
+            // 选的是哪一套：NapCat 不用令牌，界面上那几栏 SnowLuma 字段要跟着隐藏/变灰。
+            kind: cfg?.gateway === 'snowluma' ? 'snowluma' : 'napcat',
             hasToken: !!String(cfg.snowluma?.accessToken ?? '').trim(),
             wsUrl: cfg.snowluma?.wsUrl ?? '',
             httpUrl: cfg.snowluma?.httpUrl ?? ''
@@ -788,6 +1420,15 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'GET' && sub === 'status') {
         return json(res, 200, { ok: true, ...(await status()) });
       }
+      // 版本与更新：单独一个接口，因为它要联网查 GitHub 最新版（带 6 小时缓存），
+      // 不能拖慢每 2.5 秒轮询一次的 /status。
+      if (req.method === 'GET' && sub === 'version') {
+        try {
+          return json(res, 200, await updateInfo({ force: url.searchParams.get('force') === '1' }));
+        } catch (error) {
+          return json(res, 200, { ok: false, error: String(error?.message ?? error) });
+        }
+      }
       if (req.method === 'GET' && sub === 'logs') {
         // bridge=机器人的桥接日志；snowluma=网关日志；ui=面板自己的启动/操作日志。
         // 三个来源都在面板里看，用户不用再去开黑窗口。
@@ -944,10 +1585,16 @@ const server = http.createServer(async (req, res) => {
         });
         return json(res, 200, { ...result, ms: Date.now() - started });
       }
-      if (req.method === 'POST' && sub === 'snowluma/start') return json(res, 200, await startSnowLuma());
-      if (req.method === 'POST' && sub === 'snowluma/stop') return json(res, 200, await stopSnowLuma());
+      // snowluma/* 是旧名字，保留着兼容老页面和外部脚本；实际按 config.gateway 分派。
+      if (req.method === 'POST' && (sub === 'snowluma/start' || sub === 'gateway/start')) {
+        return json(res, 200, await startGateway());
+      }
+      if (req.method === 'POST' && (sub === 'snowluma/stop' || sub === 'gateway/stop')) {
+        return json(res, 200, await stopGateway());
+      }
       if (req.method === 'POST' && sub === 'bot/start') return json(res, 200, await startBot());
       if (req.method === 'POST' && sub === 'bot/stop') return json(res, 200, await stopBot());
+      if (sub === 'gateway' && req.method === 'GET') return json(res, 200, await gatewayInfo());
       if (req.method === 'POST' && sub === 'qq/start') return json(res, 200, await startQQ());
       if (req.method === 'POST' && sub === 'qq/pick') return json(res, 200, await pickQQPath());
       if (req.method === 'POST' && sub === 'qq/detect') {
@@ -955,8 +1602,11 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, p ? { ok: true, path: p } : { ok: false, error: '没探测到 QQ.exe，请点「浏览…」手动选' });
       }
       if (req.method === 'POST' && sub === 'open-webui') {
-        const opened = openAppWindow(`http://127.0.0.1:${WEBUI_PORT}/`, '点了「登录页」（网关 WebUI）');
-        return json(res, 200, { ok: opened, url: `http://127.0.0.1:${WEBUI_PORT}/` });
+        // 登录页地址跟网关走：NapCat 的 WebUI 在 6099，SnowLuma 在 5099。
+        const port = gatewayKind() === 'snowluma' ? WEBUI_PORT : NAPCAT_WEBUI_PORT;
+        const url = `http://127.0.0.1:${port}/`;
+        const opened = openAppWindow(url, '点了「登录页」（网关 WebUI）');
+        return json(res, 200, { ok: opened, url });
       }
       if (req.method === 'POST' && sub === 'mask') {
         return json(res, 200, { ok: true, apiKey: mask(readConfig()?.llm?.apiKey), accessToken: mask(readConfig()?.snowluma?.accessToken) });
@@ -1023,7 +1673,10 @@ function readUiSettings() {
     closeAction,
     theme,
     rememberClose: raw.rememberClose === true,
-    exitStopsServices: raw.exitStopsServices !== false
+    exitStopsServices: raw.exitStopsServices !== false,
+    // 是否已经走过「快速开始」：只用来决定第一次打开要不要拦到引导页，
+    // 之后用户点「以后再说」也算走过，不再打扰。
+    onboarded: raw.onboarded === true
   };
 }
 
@@ -1035,6 +1688,7 @@ function writeUiSettings(patch) {
   next.theme = next.theme === 'dark' || next.theme === 'light' ? next.theme : 'auto';
   next.rememberClose = next.rememberClose === true;
   next.exitStopsServices = next.exitStopsServices !== false;
+  next.onboarded = next.onboarded === true;
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.writeFileSync(UI_SETTINGS_PATH, JSON.stringify(next, null, 2), 'utf8');
   return next;
@@ -1130,9 +1784,10 @@ async function autostart() {
   } else {
     log('已关闭「启动时自动打开 QQ」，跳过检测。');
   }
-  const gw = await startSnowLuma();
+  const gw = await startGateway();
   if (gw.external) log('网关已经在跑，复用。');
   else if (gw.ok) log('网关启动中，等 QQ 上线…');
+  else if (gw.error) log(`网关没起来：${gw.error}`);
   // 给网关最多 60 秒上线；没上线也照样起桥接（桥接自己会重连）。
   for (let i = 0; i < 30; i += 1) {
     if (await probePort(ONEBOT_WS_PORT, 500)) break;

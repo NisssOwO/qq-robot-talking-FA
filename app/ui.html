@@ -242,6 +242,9 @@ input[type=time]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(
 .badge i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .badge.on { color: var(--ok); background: var(--ok-soft); }
 .badge.off { color: var(--muted); background: var(--surface-sunken); }
+.badge.warn { color: var(--warn); background: var(--warn-soft); }
+a.link { color: var(--accent-text, #7fb4ff); text-decoration: none; }
+a.link:hover { text-decoration: underline; }
 .switch { width: 38px; height: 21px; border-radius: 999px; background: var(--border); position: relative;
   cursor: pointer; transition: background .16s; flex: 0 0 auto; border: 0; padding: 0; }
 .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 17px; height: 17px;
@@ -463,6 +466,7 @@ const $ = (id) => document.getElementById(id);
 
 const NAV = [
   { group: '运行', items: [
+    { id: 'start',   label: '快速开始', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M5 4l14 8-14 8z"/></svg>' },
     { id: 'status',  label: '启动与状态', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M4 13h4l2 5h4l2-5h4"/><path d="M12 3v10"/></svg>' },
     { id: 'sessions', label: '会话与审批', svg: '<svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg>' }
   ]},
@@ -534,7 +538,7 @@ statusView.innerHTML = head('LAUNCHER', '启动与状态', '把网关和机器�
       <button class="btn mini" id="btn-gw-start-k">启动网关</button>
       <button class="btn mini primary" id="btn-bot-start-k">启动机器人</button></div>
     <div class="conn" style="grid-template-columns:1fr 1fr">
-      <div class="conn-item"><i class="led" id="lamp-5099"></i><div><div class="conn-name">QQ 网关页面</div><div class="conn-sub">127.0.0.1:5099</div></div><span class="conn-state" id="st-5099">—</span></div>
+      <div class="conn-item"><i class="led" id="lamp-5099"></i><div><div class="conn-name">QQ 网关页面</div><div class="conn-sub" id="conn-gw-webui">127.0.0.1:—</div></div><span class="conn-state" id="st-5099">—</span></div>
       <div class="conn-item"><i class="led" id="lamp-38000"></i><div><div class="conn-name">网关接口</div><div class="conn-sub">127.0.0.1:38000</div></div><span class="conn-state" id="st-38000">—</span></div>
       <div class="conn-item"><i class="led" id="lamp-38001"></i><div><div class="conn-name">QQ 长连接</div><div class="conn-sub">127.0.0.1:38001</div></div><span class="conn-state" id="st-38001">—</span></div>
       <div class="conn-item"><i class="led" id="lamp-3101"></i><div><div class="conn-name">本地控制台</div><div class="conn-sub" id="lamp-console-port">127.0.0.1:3101</div></div><span class="conn-state" id="st-3101">—</span></div>
@@ -552,10 +556,10 @@ statusView.innerHTML = head('LAUNCHER', '启动与状态', '把网关和机器�
 </div>
 
 <div class="card" id="gw-missing" hidden style="border-color:#f0c9a8">
-  <div class="card-head" style="background:#fff8f1;border-bottom-color:#f0c9a8"><div class="card-title" style="color:#a35b1f">还差一步：装 QQ 网关</div></div>
+  <div class="card-head" style="background:#fff8f1;border-bottom-color:#f0c9a8"><div class="card-title" style="color:#a35b1f" id="gw-missing-title">还差一步：装 SnowLuma 网关</div></div>
   <div style="padding:14px 16px 16px">
-    <p class="hint" style="margin:0 0 8px">面板起得来，但没有找到 <code>snowluma\index.mjs</code>。装好之后点上面的「启动网关」。</p>
-    <ol class="steps" style="margin:0">
+    <p class="hint" style="margin:0 0 8px" id="gw-missing-text">没找到 <code>snowluma\index.mjs</code>。</p>
+    <ol class="steps" style="margin:0" id="gw-missing-steps">
       <li>打开 SnowLuma 的 GitHub Releases 页面。</li>
       <li>下载 Windows 版压缩包。</li>
       <li>解压后把文件夹改名成 <code>snowluma</code>，放到本程序目录下（和 <code>node.exe</code> 同一层）。</li>
@@ -850,6 +854,7 @@ qqView.innerHTML = head('QQ LAUNCH', 'QQ 启动', '网关是往正在运行的 Q
     </div>
   </div>
 
+
   <div class="card span2">
     <div class="card-head"><h2 class="card-title">QQ 装在哪</h2></div>
     <div class="formgrid">
@@ -884,8 +889,126 @@ qqView.innerHTML = head('QQ LAUNCH', 'QQ 启动', '网关是往正在运行的 Q
       </div>
     </div>
   </div>
+
+  <div class="card span2">
+    <div class="card-head">
+      <h2 class="card-title">版本与更新</h2>
+      <button class="ghost" id="ver-refresh">重新检查</button>
+    </div>
+    <div id="ver-body"><div class="hint">检查中…</div></div>
+    <div class="hint" style="margin-top:10px">
+      只查版本号，不自动下载。程序版本每 6 小时问一次 GitHub；
+      协议端是 SnowLuma，它注入 QQ 客户端，QQ 一升级 hook 就可能跟不上——这时「连上了但收不到消息」多半是它。
+    </div>
+  </div>
+
 </div>`;
 $('main').appendChild(qqView);
+
+// ── 自建页：快速开始 ────────────────────────────────────
+// 第一次双击进来时，左边十几个页签很容易让人不知道从哪下手。
+// 这页把「装 QQ → 填密钥 → 连 QQ → 定范围」四步摆出来，状态实时检测，
+// 做完就不再拦人；以后想回看，左侧「快速开始」随时能进。
+const startView = document.createElement('section');
+startView.className = 'view';
+startView.dataset.view = 'start';
+startView.innerHTML = head('QUICK START', '快速开始', '三步，做完它就能在群里说话。下面的状态是实时检测的，不用担心漏配。') + `
+<div class="grid">
+  <div class="card span2"><div id="start-steps" style="padding:2px 18px 8px"></div></div>
+  <div class="card span2">
+    <div class="field-actions" style="padding:14px 18px">
+      <button class="primary" id="start-finish">完成，进入面板</button>
+      <button class="btn" id="start-skip">以后再说</button>
+      <span class="hint" id="start-hint"></span>
+    </div>
+  </div>
+</div>`;
+$('main').appendChild(startView);
+
+function startRow(no, title, desc, done, actions) {
+  const badge = done
+    ? '<span class="badge on"><i></i>已完成</span>'
+    : '<span class="badge off"><i></i>待完成</span>';
+  const circle = done
+    ? 'background:var(--ok-soft);color:var(--ok)'
+    : 'background:var(--surface-sunken);color:var(--muted)';
+  return '<div style="display:flex;gap:14px;padding:16px 0;border-top:1px solid var(--border)">'
+    + '<div style="flex:0 0 26px;height:26px;border-radius:50%;display:grid;place-items:center;font-weight:600;font-size:13px;' + circle + '">' + (done ? '✓' : no) + '</div>'
+    + '<div style="flex:1;min-width:0">'
+    + '<div style="display:flex;align-items:center;gap:10px"><b>' + title + '</b>' + badge + '</div>'
+    + '<div class="hint" style="margin:6px 0 10px;line-height:1.7">' + desc + '</div>'
+    + '<div class="field-actions">' + actions + '</div>'
+    + '</div></div>';
+}
+
+async function loadStart() {
+  const box = $('start-steps');
+  if (!box) return;
+  try {
+    const [s, g] = await Promise.all([api('status'), api('gateway')]);
+    const keyOk = Boolean(s.config?.hasKey);
+    const scopes = [...(s.config?.groups || []), ...(s.config?.private || [])];
+    const gwOk = Boolean(g.onebot?.ws);
+    const rows = [];
+
+
+    rows.push(startRow(1, '填模型密钥',
+      '语言模型是它说话的大脑。至少要有一个 API Key；接口地址和模型名默认已经填好，用的是 DeepSeek。',
+      keyOk,
+      '<button class="btn mini' + (keyOk ? '' : ' primary') + '" id="s-key">' + (keyOk ? '去修改' : '去填写') + '</button>'));
+
+    rows.push(startRow(2, '连上 QQ',
+      gwOk
+        ? '网关在线，QQ 已登录。下一步只差把机器人启动起来。'
+        : '点下面的按钮拉起 SnowLuma，然后在打开的页面里用手机 QQ 扫码登录。',
+      gwOk,
+      gwOk
+        ? '<button class="btn mini" id="s-gw-login">打开网关页面</button>'
+        : '<button class="btn mini primary" id="s-gw-start">启动网关</button><button class="btn mini" id="s-gw-refresh">刷新状态</button><button class="btn mini" id="s-gw-login">登录页</button>'));
+
+    rows.push(startRow(3, '定对话范围',
+      '不填的话它什么都不回。至少要有一个群号（或私聊 QQ），再加一个管理员 QQ——管理员的私聊和指令才有权限。',
+      scopes.length > 0,
+      '<button class="btn mini' + (scopes.length ? '' : ' primary') + '" id="s-scope">' + (scopes.length ? '去修改' : '去填写') + '</button>'));
+
+    box.innerHTML = rows.join('');
+
+    const hint = $('start-hint');
+    if (hint) {
+      const left = [!keyOk, !scopes.length].filter(Boolean).length;
+      hint.textContent = left ? '还差 ' + left + ' 处没配完（第 3 步随时可做）' : '都配好了，可以进去了';
+    }
+
+    if ($('s-qq-again')) $('s-qq-again').onclick = () => void loadStart();
+    if ($('s-key')) $('s-key').onclick = () => go('model');
+    if ($('s-scope')) $('s-scope').onclick = () => go('allow');
+    if ($('s-gw-refresh')) $('s-gw-refresh').onclick = () => void loadStart();
+    if ($('s-gw-start')) $('s-gw-start').onclick = async () => {
+      const btn = $('s-gw-start');
+      btn.disabled = true; btn.textContent = '正在拉起…';
+      try {
+        const r = await api('gateway/start', { method: 'POST' });
+        if (r.already) toast('网关已经在跑了');
+        else toast('已发起启动，稍等一下');
+      } catch (e) { toast('启动失败：' + (e.message || e), true); }
+      setTimeout(() => void loadStart(), 4000);
+      setTimeout(() => { btn.disabled = false; btn.textContent = '启动网关'; }, 6000);
+    };
+    if ($('s-gw-login')) $('s-gw-login').onclick = async () => {
+      try { const r = await api('open-webui'); window.open(r.url || 'http://127.0.0.1:5099/', '_blank'); }
+      catch (e) { toast('打不开：' + (e.message || e), true); }
+    };
+  } catch (e) {
+    box.innerHTML = '<div class="hint" style="padding:16px 0">读取状态失败：' + (e.message || e) + '</div>';
+  }
+}
+
+async function finishOnboarding() {
+  try { await api('settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ onboarded: true }) }); } catch { /* 记不住也无妨 */ }
+  go('status');
+}
+if ($('start-finish')) $('start-finish').onclick = () => void finishOnboarding();
+if ($('start-skip')) $('start-skip').onclick = () => void finishOnboarding();
 
 // ── 自建页：静默时间 ────────────────────────────────────
 // 运行总览页已合并进「启动与状态」：两页原本是同一份内容，留一页即可。
@@ -912,7 +1035,7 @@ async function loadOverview() {
   // 链路 + 今日主动搭话
   try {
     const s = await api('status');
-    const gw = s.snowluma || {}, bot = s.bot || {}, cfg = s.config || {};
+    const gw = s.gateway || s.snowluma || {}, bot = s.bot || {}, cfg = s.config || {};
     const botUp = !!(bot.running);
     ovSetLed('ov-led-5099', !!gw.webui, !!gw.running);
     ovSetSt('ov-st-5099', !!gw.webui, !!gw.running && !gw.webui);
@@ -1646,7 +1769,8 @@ function go(id) {
     if (id === 'close') void loadCloseSetting();
     if (id === 'chat') void loadChat();
     if (id === 'qzone') void loadQzone();
-    if (id === 'qq') void loadQQ();
+    if (id === 'qq') { void loadQQ(); void loadVersion(false); }
+  if (id === 'start') void loadStart();
     if (id === 'personalize') void loadPersonalize();
     if (id === 'allow') void loadScope();
     if (id === 'usage') void loadUsage();
@@ -1739,6 +1863,8 @@ async function api(path, options) {
   return data;
 }
 function toast(id, text, isErr) {
+  // 两种调用都认：toast('一句话') 和 toast('锚点id', '一句话', isErr)。
+  if (text === undefined) { text = id; isErr = false; }
   let host = document.getElementById('toast-host');
   if (!host) {
     host = document.createElement('div');
@@ -1831,9 +1957,19 @@ function connState(port, state) {
 async function refreshStatus() {
   try {
     const s = await api('status');
-    const gw = s.snowluma || {};
+    const gw = s.gateway || s.snowluma || {};
     const gwMissing = gw.installed === false && !gw.running;
     if ($('gw-missing')) $('gw-missing').hidden = !gwMissing;
+    if (gwMissing) {
+      if ($('gw-missing-title')) $('gw-missing-title').textContent = '还差一步：装 SnowLuma 网关';
+      if ($('gw-missing-text')) $('gw-missing-text').innerHTML = '没找到 <code>snowluma\\index.mjs</code>。';
+      if ($('gw-missing-steps')) $('gw-missing-steps').innerHTML =
+        '<li>打开 SnowLuma 的 GitHub Releases 页面。</li>' +
+        '<li>下载 Windows 版压缩包。</li>' +
+        '<li>解压后把文件夹改名成 <code>snowluma</code>，放到本程序目录下（和 <code>node.exe</code> 同一层）。</li>' +
+        '<li>回到这一页点「启动网关」，等灯变绿。</li>';
+    }
+    if ($('conn-gw-webui')) $('conn-gw-webui').textContent = '127.0.0.1:' + (gw.webuiPort || '—');
     led('led-gw', gwMissing ? 'warn' : gw.onebotWs ? 'ok' : gw.webui ? 'warn' : '');
     $('meta-gw').textContent = gwMissing
       ? '未安装（按上面的四步装一下）'
@@ -1888,11 +2024,16 @@ async function refreshStatus() {
       if (!$('wsUrl').value) $('wsUrl').value = gate.wsUrl || '';
       if (!$('httpUrl').value) $('httpUrl').value = gate.httpUrl || '';
 
-      $('key-mask').textContent = s.config.hasKey ? '（已设置，留空不改）' : '（未设置）';
-      $('tts-mask').textContent = tts.hasKey ? '（已设置，留空不改）' : '（未设置）';
-      $('web-mask').textContent = web.hasKey ? '（已设置，留空不改）' : '（未设置）';
-      $('gw-mask').textContent = gate.hasToken ? '（已设置，留空不改）' : '（未设置）';
-      $('ct-mask').textContent = s.config.hasConsoleToken ? '（已设置，留空不改）' : '（未设置）';
+      $('key-mask').textContent = s.config.hasKey ? '（已设置；框里是占位圆点，要换就整段重填）' : '（未设置）';
+      $('tts-mask').textContent = tts.hasKey ? '（已设置；框里是占位圆点，要换就整段重填）' : '（未设置）';
+      $('web-mask').textContent = web.hasKey ? '（已设置；框里是占位圆点，要换就整段重填）' : '（未设置）';
+      $('gw-mask').textContent = gate.hasToken ? '（已设置；框里是占位圆点，要换就整段重填）' : '（未设置）';
+      $('ct-mask').textContent = s.config.hasConsoleToken ? '（已设置；框里是占位圆点，要换就整段重填）' : '（未设置）';
+      maskFill('apiKey', s.config.hasKey);
+      maskFill('ttsApiKey', tts.hasKey);
+      maskFill('webSearchApiKey', web.hasKey);
+      maskFill('accessToken', gate.hasToken);
+      maskFill('consoleToken', s.config.hasConsoleToken);
       // 后端：standalone（直连模型）/ dsh（连 DeepSeek Harness）
       const dshCfg = s.config.dsh || {};
       const onDsh = s.config.backend === 'dsh';
@@ -2009,11 +2150,23 @@ async function loadLogs() {
 }
 
 $('btn-gw-start').onclick = async () => {
-  try { await api('snowluma/start', { method: 'POST' }); toast('toast1', '网关启动中，等几秒…'); } catch (e) { toast('toast1', e.message, true); }
+  // 后端失败是返回 { ok:false, error }，不会抛异常；只 catch 的话用户看不到任何原因。
+  try {
+    const r = await api('gateway/start', { method: 'POST' });
+    if (!r.ok) {
+      toast('toast1', r.error || '网关启动失败', true);
+      if (r.code === 'qq-missing') window.open(r.hint || 'https://im.qq.com/pcqq', '_blank');
+    } else {
+      toast('toast1', r.already ? '网关已经在跑了' : '网关启动中，等几秒…');
+    }
+  } catch (e) { toast('toast1', e.message, true); }
   setTimeout(refreshStatus, 1500);
 };
 $('btn-gw-login').onclick = async () => {
-  try { const r = await api('open-webui', { method: 'POST' }); toast('toast1', r.ok ? '已打开登录窗口' : '没找到浏览器，手动开 http://127.0.0.1:5099/'); } catch (e) { toast('toast1', e.message, true); }
+  try {
+    const r = await api('open-webui', { method: 'POST' });
+    toast('toast1', r.ok ? '已打开登录窗口' : '没找到浏览器，手动开 ' + (r.url || '网关 WebUI'));
+  } catch (e) { toast('toast1', e.message, true); }
 };
 $('btn-bot-start').onclick = async () => {
   try { await api('bot/start', { method: 'POST' }); toast('toast1', '机器人启动中…'); } catch (e) { toast('toast1', e.message, true); }
@@ -2023,6 +2176,40 @@ $('btn-bot-stop').onclick = async () => {
   try { await api('bot/stop', { method: 'POST' }); toast('toast1', '已停止'); } catch (e) { toast('toast1', e.message, true); }
   setTimeout(refreshStatus, 900);
 };
+// 密钥框的占位圆点：填过的 key 不回传明文（后端只给 hasKey），
+// 但空着会让人以为「没填」。所以框里放一串圆点表示「已经存了」，
+// 保存时再把圆点当空值处理——不传就沿用服务器上的旧 key。
+const MASK_DOTS = '••••••••••••';
+const MASKED_INPUTS = ['apiKey', 'ttsApiKey', 'webSearchApiKey', 'accessToken', 'consoleToken'];
+// 用户点进过哪个框，就不再自动补圆点（否则刚清空、还没打字，又被填回去）。
+const maskTouched = new Set();
+function maskFill(id, has) {
+  const el = $(id);
+  if (!el) return;
+  if (!has) {
+    if (el.value === MASK_DOTS) el.value = '';
+    return;
+  }
+  if (maskTouched.has(id)) return;
+  if (!el.value) el.value = MASK_DOTS;
+}
+MASKED_INPUTS.forEach((id) => {
+  const el = $(id);
+  if (!el) return;
+  // 点进去就清掉圆点，直接打新的；不输入就走开，下一轮状态刷新会把圆点补回来。
+  el.addEventListener('focus', () => {
+    if (el.value === MASK_DOTS) el.value = '';
+    maskTouched.add(id);
+  });
+  el.addEventListener('blur', () => maskTouched.delete(id));
+});
+// 圆点 / 空 → undefined（JSON 里不出现这个键，后端就不会覆盖）
+function unmaskKey(v) {
+  const s = String(v ?? '').trim();
+  if (!s) return undefined;
+  return /^[•·*]+$/.test(s) ? undefined : s;
+}
+
 // 两个自建页共用同一份表单：保存时总是提交全部字段，避免只改一部分把别的键清掉。
 async function saveAll(btnId, toastId) {
   const btn = $(btnId);
@@ -2032,11 +2219,11 @@ async function saveAll(btnId, toastId) {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        baseUrl: $('baseUrl').value, model: $('model').value, apiKey: $('apiKey').value,
+        baseUrl: $('baseUrl').value, model: $('model').value, apiKey: unmaskKey($('apiKey').value),
         ttsBaseUrl: $('ttsBaseUrl').value, ttsModel: $('ttsModel').value,
-        ttsApiKey: $('ttsApiKey').value, ttsEnabled: $('ttsEnabled').checked,
-        webSearchApiKey: $('webSearchApiKey').value, webSearchBaseURL: $('webSearchBaseURL').value,
-        wsUrl: $('wsUrl').value, httpUrl: $('httpUrl').value, accessToken: $('accessToken').value,
+        ttsApiKey: unmaskKey($('ttsApiKey').value), ttsEnabled: $('ttsEnabled').checked,
+        webSearchApiKey: unmaskKey($('webSearchApiKey').value), webSearchBaseURL: $('webSearchBaseURL').value,
+        wsUrl: $('wsUrl').value, httpUrl: $('httpUrl').value, accessToken: unmaskKey($('accessToken').value),
         // 对话范围（群/好友/停用/备注/管理员/端口）只在「对话范围」页保存，
         // 这里不提交——否则没进过那页时 scopeState 是空的，会把白名单清空。
         backend: $('backendDsh').checked ? 'dsh' : 'standalone',
@@ -2245,7 +2432,9 @@ async function saveScope(btnId, toastId) {
     const body = scopeSnapshot();
     body.ownerQQ = $('ownerQQ').value;
     body.consolePort = $('consolePort').value;
-    body.consoleToken = $('consoleToken').value;
+    // 有存过令牌时框里是占位圆点，别把圆点当令牌存回去。
+    const ct = unmaskKey($('consoleToken').value);
+    if (ct) body.consoleToken = ct;
     body.denyGroups = $('sc-dn-groups').value;
     body.denyPrivate = $('sc-dn-private').value;
     await api('config', {
@@ -2469,6 +2658,9 @@ async function loadUsage() {
   }
 }
 
+
+// ── QQ 网关 ───────────────────────────────────────────────
+
 // ── 角色包 ───────────────────────────────────────────────
 let rpState = { roles: [], current: '', defaults: {} };
 
@@ -2625,7 +2817,7 @@ $('btn-fetch-models').onclick = async () => {
     const r = await api('models', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ baseUrl: $('baseUrl').value, apiKey: $('apiKey').value })
+      body: JSON.stringify({ baseUrl: $('baseUrl').value, apiKey: unmaskKey($('apiKey').value) })
     });
     const list = r.models || [];
     renderModelChips('model-chips', 'model', list);
@@ -3098,6 +3290,60 @@ if ($('qq-save')) {
   };
 }
 
+// ── 版本与更新 ──────────────────────────────────────────
+// 三条线：本程序（GitHub Release）、协议端 SnowLuma（GitHub Release）、本机 QQ 版本。
+// 只查不装，下载一律走浏览器，免得面板要处理 30MB+ 的覆盖写入。
+const VER_ROW = 'display:grid;grid-template-columns:110px 1fr;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);align-items:baseline;font-size:13.5px';
+const escVer = function (v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+};
+
+function verRow(label, value, tone, note, link) {
+  const badge = tone ? '<span class="badge ' + tone + '">' + escVer(note) + '</span>' : '';
+  const a = link ? ' <a class="link" href="' + escVer(link.href) + '" target="_blank" rel="noreferrer">' + escVer(link.text) + '</a>' : '';
+  return '<div style="' + VER_ROW + '"><div class="hint">' + label + '</div><div><b>' + escVer(value) + '</b> ' + badge + a + '</div></div>';
+}
+
+function renderVersion(v) {
+  const body = $('ver-body');
+  if (!body) return;
+  if (!v || v.ok === false) {
+    body.innerHTML = '<div class="hint">检查失败：' + escVer((v && v.error) || '未知错误') + '</div>';
+    return;
+  }
+  const a = v.app || {};
+  const s = v.snowluma || {};
+  const q = v.qq || {};
+  const rows = [
+    verRow('本程序', 'v' + (a.version || '?'),
+      a.updateAvailable ? 'warn' : a.error ? 'off' : 'on',
+      a.updateAvailable ? '有新版 v' + a.latest : a.error ? '查不到最新版' : '已是最新',
+      a.updateAvailable ? { href: a.url, text: '去下载' } : null),
+    verRow('SnowLuma', s.version ? 'v' + s.version : '未安装',
+      s.updateAvailable ? 'warn' : s.error ? 'off' : 'on',
+      s.updateAvailable ? '有新版 v' + s.latest : s.error ? '查不到最新版' : '已是最新',
+      s.updateAvailable ? { href: s.url, text: '去下载' } : null),
+    verRow('本机 QQ', q.version || '没找到',
+      q.changed ? 'warn' : null,
+      q.changed ? '升级过（上次 ' + q.previous + '）' : '',
+      null)
+  ];
+  body.innerHTML = rows.join('');
+}
+
+async function loadVersion(force) {
+  const body = $('ver-body');
+  if (body) body.innerHTML = '<div class="hint">检查中…</div>';
+  try {
+    renderVersion(await api('version' + (force ? '?force=1' : '')));
+  } catch (e) {
+    if (body) body.innerHTML = '<div class="hint">检查失败：' + escVer(e.message) + '</div>';
+  }
+}
+if ($('ver-refresh')) $('ver-refresh').onclick = function () { void loadVersion(true); };
+
 // 关窗时用 beacon 通知服务端；服务端挂 3 秒，期间有新页面加载（下面的 ping）就取消，
 // 所以刷新不会误停。点右上角 × 才是真关闭。
 fetch('/panel/api/ping').catch(function () {});
@@ -3115,6 +3361,24 @@ if (initialPage && NAV.some(function (g) { return g.items.some(function (it) { r
 } else {
   go('status');
 }
+
+// 第一次打开（或者 key/范围都还没配）先拦到「快速开始」。
+// 已经配好的人不该被引导页烦；url 带 hash 的也不拦，用户可能就是要去某一页。
+void (async function maybeOnboard() {
+  if (initialPage) return;
+  try {
+    const st = await api('settings');
+    if (st.onboarded) return;
+    const s = await api('status');
+    const scopes = [...(s.config?.groups || []), ...(s.config?.private || [])];
+    if (s.config?.hasKey && scopes.length) {
+      // 老用户：配置齐了，直接标记走过，以后不再检查。
+      await api('settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ onboarded: true }) });
+      return;
+    }
+    go('start');
+  } catch { /* 读不到就别拦 */ }
+})();
 refreshStatus();
 loadLogs();
 setInterval(refreshStatus, 2500);

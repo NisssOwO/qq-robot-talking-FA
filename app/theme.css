@@ -1,0 +1,46 @@
+/* QQ 聊天机器人 · 公共主题变量
+   面板（app/ui.html）与首次配置向导（app/setup.mjs）共用，
+   保证两个界面看起来是同一件东西。改主题色只改这一个文件。
+
+   桥接控制台（public/console.html）的变量是这份的超集（它有 topbar/chip/save-bar 等
+   专用变量），仍由它自己维护；核心色值必须与这里保持一致。 */
+
+:root {
+  --bg:#f7f8fb; --surface:#fff; --surface-subtle:#fafbfe; --surface-hover:#f5f6fa;
+  --card-border:#e4e9f1; --border:#dfe4ed; --text:#202635; --text-strong:#293044;
+  --text-secondary:#5f6a7d; --muted:#5d6878; --muted-soft:#828da1; --placeholder:#929bad;
+  --accent:#4d6bfe; --accent-hover:#405de5; --accent-soft-bg:#edf1ff; --accent-soft-fg:#405ee6;
+  --accent-border-soft:#c8d4ff; --ok:#1f8a5b; --warn:#b45309; --bad:#c0392b;
+  --mono: ui-monospace,"Cascadia Mono",Consolas,"Noto Sans Mono",monospace;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --bg:#15171d; --surface:#1b1e26; --surface-subtle:#20242d; --surface-hover:#252a34;
+    --card-border:#2c313c; --border:#333846; --text:#e7eaf1; --text-strong:#f2f4f9;
+    --text-secondary:#a2abbb; --muted:#98a1b2; --muted-soft:#7d8698; --placeholder:#6f7889;
+    --accent:#7d92ff; --accent-hover:#93a4ff; --accent-soft-bg:#232a44; --accent-soft-fg:#a9b8ff;
+    --accent-border-soft:#3a4468; --ok:#4cc38a; --warn:#e0a458; --bad:#e5776b;
+    color-scheme: dark;
+  }
+}
+
+/* 手动切主题：覆盖上面的媒体查询（面板用 data-theme 属性） */
+:root[data-theme="dark"] {
+  --bg:#15171d; --surface:#1b1e26; --surface-subtle:#20242d; --surface-hover:#252a34;
+  --card-border:#2c313c; --border:#333846; --text:#e7eaf1; --text-strong:#f2f4f9;
+  --text-secondary:#a2abbb; --muted:#98a1b2; --muted-soft:#7d8698; --placeholder:#6f7889;
+  --accent:#7d92ff; --accent-hover:#93a4ff; --accent-soft-bg:#232a44; --accent-soft-fg:#a9b8ff;
+  --accent-border-soft:#3a4468; --ok:#4cc38a; --warn:#e0a458; --bad:#e5776b;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg:#f7f8fb; --surface:#fff; --surface-subtle:#fafbfe; --surface-hover:#f5f6fa;
+  --card-border:#e4e9f1; --border:#dfe4ed; --text:#202635; --text-strong:#293044;
+  --text-secondary:#5f6a7d; --muted:#5d6878; --muted-soft:#828da1; --placeholder:#929bad;
+  --accent:#4d6bfe; --accent-hover:#405de5; --accent-soft-bg:#edf1ff; --accent-soft-fg:#405ee6;
+  --accent-border-soft:#c8d4ff; --ok:#1f8a5b; --warn:#b45309; --bad:#c0392b;
+  color-scheme: light;
+}
