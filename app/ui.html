@@ -72,6 +72,17 @@ h1 { margin: 4px 0 4px; font-size: 21px; font-weight: 650; letter-spacing: -.2px
 .card-head .spacer { flex: 1; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
 .grid > .span2 { grid-column: span 2; }
+.ver-row { display: grid; grid-template-columns: 108px 132px minmax(0, 1fr) auto; gap: 12px 16px;
+  align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.ver-row:last-child { border-bottom: none; }
+.ver-k { color: var(--muted); font-size: 13px; }
+.ver-n { font-weight: 600; font-size: 14px; font-variant-numeric: tabular-nums; }
+.ver-b { display: flex; align-items: center; }
+.ver-a { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+@media (max-width: 720px) {
+  .ver-row { grid-template-columns: 108px 1fr; }
+  .ver-a { justify-content: flex-start; }
+}
 @media (max-width: 960px) {
   .grid { grid-template-columns: 1fr; }
   .grid > .span2 { grid-column: auto; }
@@ -493,6 +504,7 @@ const NAV = [
     { id: 'usage',    label: '令牌用量', svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9M9.5 10h4a1.8 1.8 0 010 3.6h-3"/></svg>' , self: true },
     { id: 'access',   label: '访问与安全', svg: '<svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>' },
     { id: 'operations', label: '调试与运维', svg: '<svg viewBox="0 0 24 24"><path d="M15 4a4.5 4.5 0 00-4 6.7L4 17.6 6.4 20l6.9-7a4.5 4.5 0 005.7-6.2l-2.6 2.6-2.4-2.4z"/></svg>' },
+    { id: 'update',     label: '版本与更新', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M12 4v10"/><path d="M8 11l4 4 4-4"/><path d="M5 19h14"/></svg>' },
     { id: 'reference',  label: '工具参考', svg: '<svg viewBox="0 0 24 24"><path d="M5 4h9a3 3 0 013 3v13H8a3 3 0 01-3-3z"/><path d="M17 7h2v13h-2M8 8h6M8 12h6"/></svg>' }
   ]}
 ];
@@ -899,20 +911,37 @@ qqView.innerHTML = head('QQ LAUNCH', 'QQ 启动', '网关是往正在运行的 Q
     </div>
   </div>
 
-  <div class="card span2">
-    <div class="card-head">
-      <h2 class="card-title">版本与更新</h2>
-      <button class="ghost" id="ver-refresh">重新检查</button>
-    </div>
-    <div id="ver-body"><div class="hint">检查中…</div></div>
-    <div class="hint" style="margin-top:10px">
-      只查版本号，不自动下载。程序版本每 6 小时问一次 GitHub；
-      协议端是 SnowLuma，它注入 QQ 客户端，QQ 一升级 hook 就可能跟不上——这时「连上了但收不到消息」多半是它。
-    </div>
-  </div>
-
 </div>`;
 $('main').appendChild(qqView);
+
+// ── 自建页：版本与更新 ──────────────────────────────────
+// 三条线各管各的：程序本身（GitHub Release）、协议端 SnowLuma、本机 QQ 客户端。
+// 单独成页是因为它要联网、会失败、偶尔还要覆盖安装，混在「QQ 启动」里太挤。
+const updateView = document.createElement('section');
+updateView.className = 'view';
+updateView.dataset.view = 'update';
+updateView.style.maxWidth = '1040px';
+updateView.style.margin = '0 auto';
+updateView.innerHTML = head(
+  'UPDATE',
+  '版本与更新',
+  '三条线各管各的：程序本身、协议端 SnowLuma、本机 QQ 客户端。只查版本号，动手前会告诉你要发生什么。'
+) + `
+<div class="grid">
+  <div class="card span2">
+    <div class="card-head">
+      <h2 class="card-title">当前版本</h2>
+      <button class="ghost" id="ver-refresh">重新检查</button>
+    </div>
+    <div id="ver-body"><div class="hint" style="padding:16px">检查中…</div></div>
+    <div class="hint" style="padding:14px 16px 16px; border-top:1px solid var(--border); line-height:1.75">
+      「立即更新」只在真有新版时出现。更新本程序会先停机器人、静默覆盖安装、装完自动重开，安装目录和配置都保留；
+      更新 SnowLuma 会停网关、换文件、再拉起来，登录态保留。程序版本每 6 小时查一次 GitHub。
+    </div>
+  </div>
+</div>`;
+$('main').appendChild(updateView);
+
 
 // ── 自建页：快速开始 ────────────────────────────────────
 // 第一次双击进来时，左边十几个页签很容易让人不知道从哪下手。
@@ -1846,7 +1875,8 @@ function go(id) {
     if (id === 'close') void loadCloseSetting();
     if (id === 'chat') void loadChat();
     if (id === 'qzone') void loadQzone();
-    if (id === 'qq') { void loadQQ(); void loadVersion(false); }
+    if (id === 'qq') { void loadQQ(); }
+    if (id === 'update') { void loadVersion(false); }
   if (id === 'start') void loadStart();
     if (id === 'personalize') void loadPersonalize();
     if (id === 'allow') void loadScope();
@@ -3370,7 +3400,6 @@ if ($('qq-save')) {
 // ── 版本与更新 ──────────────────────────────────────────
 // 三条线：本程序（GitHub Release）、协议端 SnowLuma（GitHub Release）、本机 QQ 版本。
 // 只查不装，下载一律走浏览器，免得面板要处理 30MB+ 的覆盖写入。
-const VER_ROW = 'display:grid;grid-template-columns:110px 1fr;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);align-items:baseline;font-size:13.5px';
 const escVer = function (v) {
   return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -3381,10 +3410,15 @@ function verRow(label, value, tone, note, links) {
   const badge = tone ? '<span class="badge ' + tone + '">' + escVer(note) + '</span>' : '';
   const list = Array.isArray(links) ? links : links ? [links] : [];
   const actions = list.map(function (l) {
-    if (l.act) return ' <button class="btn" data-ver-act="' + escVer(l.act) + '" style="margin-left:8px">' + escVer(l.text) + '</button>';
-    return ' <a class="link" href="' + escVer(l.href) + '" target="_blank" rel="noreferrer">' + escVer(l.text) + '</a>';
+    if (l.act) return '<button class="btn" data-ver-act="' + escVer(l.act) + '">' + escVer(l.text) + '</button>';
+    return '<a class="link" href="' + escVer(l.href) + '" target="_blank" rel="noreferrer">' + escVer(l.text) + '</a>';
   }).join('');
-  return '<div style="' + VER_ROW + '"><div class="hint">' + label + '</div><div><b>' + escVer(value) + '</b> ' + badge + actions + '</div></div>';
+  return '<div class="ver-row">'
+    + '<div class="ver-k">' + label + '</div>'
+    + '<div class="ver-n">' + escVer(value) + '</div>'
+    + '<div class="ver-b">' + badge + '</div>'
+    + '<div class="ver-a">' + actions + '</div>'
+    + '</div>';
 }
 
 function renderVersion(v) {

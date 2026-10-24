@@ -134,6 +134,11 @@ partial class MainForm : Form
     Process panel;
     bool quitting = false;
     bool webReady = false;
+    // 关窗询问正在处理中。用户手快连点两次 × 时，第二次 FormClosing 会再排一个
+    // BeginInvoke，两个 CloseDialog 叠在一起；第一个选「缩到托盘」把窗口藏了之后，
+    // 第二个的 ShowDialog(owner) 又强制把主窗口显示回来 —— 屏幕上就多出一个白窗，
+    // 得再关一次才干净。这个标志让第二次点击直接吞掉。
+    bool closeAsked = false;
 
     public MainForm()
     {
@@ -340,6 +345,9 @@ partial class MainForm : Form
     // ---------- 托盘 ----------
     void HideToTray(bool saySomething)
     {
+        // WebView2 的 composition 层不一定跟着 Form 一起藏，窗口看不见了
+        // 屏幕上还会剩一块白底。先把它显式关掉，回来的时候再打开。
+        if (web != null && web.Visible) web.Visible = false;
         Hide();
         ShowInTaskbar = false;
         if (saySomething && tray != null)
@@ -351,6 +359,7 @@ partial class MainForm : Form
     void RestoreFromTray()
     {
         ShowInTaskbar = true;
+        if (web != null && !web.Visible) web.Visible = true;
         Show();
         WindowState = FormWindowState.Normal;
         Activate();
@@ -360,16 +369,20 @@ partial class MainForm : Form
     // ---------- 关窗 ----------
     void OnClosing(object sender, FormClosingEventArgs e)
     {
+        Program.Log("OnClosing 进入：reason=" + e.CloseReason + " quitting=" + quitting + " visible=" + Visible);
         if (quitting) return;
         if (e.CloseReason == CloseReason.WindowsShutDown || e.CloseReason == CloseReason.TaskManagerClosing) return;
 
         e.Cancel = true;
+        if (closeAsked) return;
+        closeAsked = true;
         Program.Log("关窗请求：" + e.CloseReason);
         Settings.Read();
         Program.Log("当前设置 close=" + Settings.CloseAction + " remember=" + Settings.RememberClose + " exitStops=" + Settings.ExitStopsServices);
 
         if (Settings.RememberClose)
         {
+            closeAsked = false;
             if (Settings.CloseAction == "exit") DoExit();
             else HideToTray(true);
             return;
@@ -380,6 +393,9 @@ partial class MainForm : Form
         {
             try
             {
+                // 回到这里时窗口可能已经被别的路径藏起来了；这时再 ShowDialog(this)
+                // 会强行把 owner 显示出来，等于又开一次白窗。
+                if (quitting || !Visible) return;
                 var dlg = new CloseDialog(Settings.CloseAction == "exit", Settings.ExitStopsServices);
                 Program.Log("弹关窗对话框");
                 dlg.ShowDialog(this);
@@ -392,6 +408,10 @@ partial class MainForm : Form
             catch (Exception ex)
             {
                 Program.Log("关窗处理异常：" + ex);
+            }
+            finally
+            {
+                closeAsked = false;
             }
         });
     }
