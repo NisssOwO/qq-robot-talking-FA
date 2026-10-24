@@ -978,6 +978,27 @@ function loadConfig() {
       // 问候一律走语音：可选行为，面板「个性」页开关，改完下一轮就生效（不用重启）。
       // 关掉时只会在「聊天」里正常打字，不占语音合成的时间。
       greetingVoice: false,
+    // QQ 空间：定时发说说。只在非静默时段发，内容由模型写，图可以是收藏表情 / AI 生图。
+    qzone: {
+      enabled: false,
+      maxPerDay: 2,
+      gapMinMin: 180,
+      gapMaxMin: 480,
+      ugcRight: 4,
+      contentMode: 'daily',
+      imageMode: 'none',
+      aiImage: {
+        provider: 'pollinations',
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: '',
+        model: 'flux',
+        size: '1024x1024',
+        promptPrefix: '',
+        width: 768,
+        height: 768
+      }
+    },
+
       // 夜间催睡：到点由桥接直发（文字 + 收藏表情），不经过模型、不占主动搭话额度。
       // 这是「写死的行为」，模型没被唤醒也不会漏；静默时段、暂停、非 reserved2 一律不发。
       nightSticker: {
@@ -3760,6 +3781,9 @@ async function main() {
             || url.pathname.startsWith('/api/socialV2/')
             || url.pathname.startsWith('/api/send/')
             || url.pathname.startsWith('/api/images/')
+            // 模型自己发说说（qq_post_qzone → /api/qzone/ai-post）：这是给 AI 用的写入面，
+            // 只放行这一个，/api/qzone/config 与 /api/qzone/post 仍然只有控制台能碰。
+            || url.pathname === '/api/qzone/ai-post'
             || url.pathname === '/api/authorize/read';
           if (!agentAllowed) {
             sendJson({ ok: false, error: '该接口仅控制台可用' }, 403);
@@ -5161,6 +5185,132 @@ async function main() {
           log(`[reserved2] 手动主动搭话：${key}${force ? '（静默时段强发）' : ''}`);
           void sendWakePromptV2(key, 'proactiveCheck').catch((error) => log(`[reserved2] 手动主动搭话唤醒异常 ${key}:`, error?.message ?? error));
           sendJson({ ok: true, woke: true });
+          return;
+        }
+        // ── QQ 空间 ──
+        if (req.method === 'GET' && url.pathname === '/api/qzone/status') {
+          sendJson({ ok: true, ...qzoneStatus() });
+          return;
+        }
+        if (req.method === 'POST' && url.pathname === '/api/qzone/config') {
+          const body = await readBody();
+          const next = { ...(cfg.socialV2?.qzone ?? {}), ...(body ?? {}) };
+          if (!cfg.socialV2) cfg.socialV2 = {};
+          cfg.socialV2.qzone = next;
+          const configFile = path.join(ROOT, 'config.json');
+          const file = readConfigObject(configFile);
+          if (!file.socialV2) file.socialV2 = {};
+          file.socialV2.qzone = next;
+          atomicWriteJson(configFile, file);
+          log('[qzone] 空间配置已更新');
+          // 改完就按新配置重排（开关从关到开、条数变了、窗口变了都要立刻生效）
+          try {
+            const conf = qzoneConf();
+            if (conf.enabled) {
+              scheduleNextQzone(conf);
+              if (!qzoneTimer) startQzoneTicker();
+            } else if (qzoneTimer) {
+              clearTimeout(qzoneTimer);
+              qzoneTimer = null;
+              qzoneState.nextAt = 0;
+              saveQzoneState();
+              log('[qzone] 已关闭自动发说说，取消排期');
+            }
+          } catch (error) {
+            log('[qzone] 重排失败：' + (error?.message ?? error));
+          }
+          sendJson({ ok: true, ...qzoneStatus() });
+          return;
+        }
+        if (req.method === 'POST' && url.pathname === '/api/qzone/post') {
+          const body = await readBody();
+          const force = body?.force === true;
+          const quietNow = quietHours.status();
+          if (!force && quietNow.state && quietNow.state !== 'normal') {
+            const until = quietNow.until ? '（' + new Date(quietNow.until).toLocaleTimeString('zh-CN', { hour12: false }) + ' 结束）' : '';
+            sendJson({ ok: false, code: 'quiet', error: '现在是静默时段' + until + '，要发请勾上「静默时段也发」' }, 409);
+            return;
+          }
+          try {
+            const result = await postQzone({ text: String(body?.text ?? ''), imagePrompt: String(body?.imagePrompt ?? ''), manual: true });
+            sendJson({ ok: true, ...result });
+          } catch (error) {
+            log('[qzone] 发送失败：' + (error?.message ?? error));
+            sendJson({ ok: false, error: String(error?.message ?? error) }, 500);
+          }
+          return;
+        }
+        // 面板上「让 AI 写一条」：不传内容，直接唤醒模型去写并发
+        if (req.method === 'POST' && url.pathname === '/api/qzone/trigger') {
+          const body = await readBody();
+          const force = body?.force === true;
+          const quietNow = quietHours.status();
+          if (!force && quietNow.state && quietNow.state !== 'normal') {
+            const until = quietNow.until ? '（' + new Date(quietNow.until).toLocaleTimeString('zh-CN', { hour12: false }) + ' 结束）' : '';
+            sendJson({ ok: false, code: 'quiet', error: '现在是静默时段' + until + '，要发请勾上「静默时段也发」' }, 409);
+            return;
+          }
+          const ownerKey = cfg.ownerQQ ? `private:${cfg.ownerQQ}` : '';
+          const groupKey = Array.isArray(cfg.allow?.groups) && cfg.allow.groups.length ? `group:${cfg.allow.groups[0]}` : '';
+          const key = [ownerKey, groupKey].find((k) => k && isSessionAllowedInCurrentMode(k)) || '';
+          if (!key) {
+            sendJson({ ok: false, error: '没有可用的会话（白名单为空）' }, 400);
+            return;
+          }
+          // 记一个「接下来 5 分钟内发的那条不算额度」的标记，模型回来调 qq_post_qzone 时用。
+          qzoneState.manualUntil = Date.now() + 5 * 60000;
+          saveQzoneState();
+          log(`[qzone] 面板手动触发：唤醒模型写说说（${key}）`);
+          void sendWakePromptV2(key, 'qzoneCheck').catch((error) => log('[qzone] 唤醒失败：' + (error?.message ?? error)));
+          sendJson({ ok: true, woke: true, key });
+          return;
+        }
+        // 面板「最近发过」：直接问 OneBot 要空间说说列表
+        if (req.method === 'GET' && url.pathname === '/api/qzone/recent') {
+          try {
+            const data = await onebotCall('get_qzone_msg_list', {}, 30000);
+            const list = Array.isArray(data?.msglist) ? data.msglist : [];
+            sendJson({
+              ok: true,
+              items: list.slice(0, 20).map((m) => ({
+                tid: String(m.tid ?? ''),
+                content: String(m.content ?? ''),
+                at: Number(m.createTime ?? m.created_time ?? m.create_time ?? 0)
+              })).filter((m) => m.tid)
+            });
+          } catch (error) {
+            sendJson({ ok: false, error: String(error?.message ?? error) }, 500);
+          }
+          return;
+        }
+        // 删除一条说说（面板手动删）
+        if (req.method === 'POST' && url.pathname === '/api/qzone/delete') {
+          const body = await readBody();
+          const tid = String(body?.tid ?? '').trim();
+          if (!tid) {
+            sendJson({ ok: false, error: '缺少 tid' }, 400);
+            return;
+          }
+          try {
+            await onebotCall('delete_qzone_msg', { tid }, 30000);
+            log('[qzone] 已删除一条说说（' + tid + '）');
+            sendJson({ ok: true });
+          } catch (error) {
+            sendJson({ ok: false, error: String(error?.message ?? error) }, 500);
+          }
+          return;
+        }
+        // AI 调工具时走这个：内容由模型写，图由桥接配
+        if (req.method === 'POST' && url.pathname === '/api/qzone/ai-post') {
+          const body = await readBody();
+          try {
+            const isManual = Number(qzoneState.manualUntil ?? 0) > Date.now();
+            if (isManual) qzoneState.manualUntil = 0;
+            const result = await postQzone({ text: String(body?.text ?? ''), imagePrompt: String(body?.imagePrompt ?? ''), manual: isManual });
+            sendJson({ ok: true, ...result });
+          } catch (error) {
+            sendJson({ ok: false, error: String(error?.message ?? error) }, 500);
+          }
           return;
         }
         if (req.method === 'GET' && url.pathname === '/api/socialV2/activity') {
@@ -8180,6 +8330,30 @@ async function main() {
   }
 
 
+  // 通用 OneBot action 调用。发消息那条链路有一堆自己的逻辑（reply/at/CQ 转义），
+  // 空间说说这类扩展 action 用这个口子直接打过去。
+  async function onebotCall(action, params = {}, timeoutMs = 20000) {
+    const httpUrl = String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000').replace(/[\/]+$/, '');
+    const res = await fetch(`${httpUrl}/${action}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(cfg.snowluma?.accessToken ? { authorization: `Bearer ${cfg.snowluma.accessToken}` } : {})
+      },
+      body: JSON.stringify(params ?? {}),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(`OneBot ${action} 失败：HTTP ${res.status}${res.status === 426 ? '（snowluma.httpUrl 可能指向了 WebSocket 端口）' : ''}`);
+    }
+    const retcode = Number(body?.retcode ?? 0);
+    if (retcode !== 0) {
+      throw new Error(`OneBot ${action} 失败：${body?.wording || body?.message || `retcode=${retcode}`}`);
+    }
+    return body?.data ?? body;
+  }
+
   async function onebotSend(kind, id, message, replyToMessageId, atUserId = null) {
     const segments = [];
     if (replyToMessageId !== undefined && replyToMessageId !== null && String(replyToMessageId).trim() !== '') {
@@ -11123,6 +11297,37 @@ async function main() {
 【实在没话】
 确实没有想说的，就安静收尾（qq_mark_read 或 qq_set_wake_config），不用硬凑。`;
     }
+    if (reason === 'qzoneCheck') {
+      const conf = qzoneConf();
+      const withImage = conf.imageMode !== 'none';
+      const picked = conf.contentModes[Math.floor(Math.random() * conf.contentModes.length)];
+      const pillar = pickQzonePillar();
+      qzoneState.pendingPillar = pillar.id;
+      const slot = String(qzoneState.nextTag ?? '') || '这会儿';
+      const history = Array.isArray(qzoneState.history) ? qzoneState.history : [];
+      const recentBlock = history.length
+        ? '【最近已经发过的，别再写】\n' + history.slice(-3).map((h, i) => (i + 1) + '. ' + String(h.text).replace(/\s+/g, ' ').slice(0, 120)).join('\n') + '\n这一条必须换一件完全不同的事：换场景、换时间、换心情。哪怕季节一样，也不要再写同一件东西（比如连着写金木犀、连着写邮局）。\n'
+        : '';
+      return `${base}【发一条空间说说】${key}
+原因：到点了，你想在自己的 QQ 空间发一条说说。这一轮不是回消息，也不是跟谁说话。
+
+【写什么】
+${recentBlock}
+- 用「日语原文 + 中文字幕」两段式：先写日语（三十到八十字），换行再写这一段的中文。
+- 两段都是正文，不要加「日语」「中文」这类标签，不要括号，不要用 markdown。
+- 口吻像在手机备忘录里随手记一笔。
+- 现在大概是${slot}。写得像这个时间点会有的心情（早上是赶、中午是饿、傍晚是松下来、夜里是安静）。
+- 这次写什么：${picked === 'topic' ? '（「接群里的茬」）把你最近看到的、大家聊过的某个话题，写成你自己的感受——但**不要提具体是谁说的、也不要复述原话**，只留那点情绪。' : '（「写自己」）这一条只写：' + pillar.text + '。'}
+- **必须带一个具体的东西**：地点、物品名、吃的东西、数字、时间里的至少一个。写「今天有点累」不合格，写「排练室的空调坏了，练到一半全是汗」合格。
+- **结尾不许感慨**：不要用「真好」「治愈」「感慨」「真好呢」这类词收尾，也不要总结一句道理。说完那件事就停。
+- **不许**出现：问候语（早安/晚安/在吗）、"今天也要加油"这类打气话、AI 自我指涉、"作为一个…"、任何括号旁白。
+- **不许**提群友、提 QQ、提"刚才有人跟我说"。
+- 不要编世界观里没写的剧情，不要写别的偶像做了什么。
+
+【怎么发】
+调用 qq_post_qzone：第一个参数 content 是正文；第二个参数 imagePrompt 是一句英文画面描述${withImage ? '（这次配图模式是 ' + conf.imageMode + '，会按这句描述出图）' : '（这次不配图，可以留空）'}。
+发完就安静收尾（qq_mark_read 或 qq_set_wake_config），不要在群里额外说一句"我刚发了说说"。`;
+    }
     if (reason === 'poke') {
       return `${base}【唤醒】${key}\n原因：有人拍了一拍（可能拍了你，也可能拍了别人）。\n先看未读/最近消息里的 [拍一拍] 事件：如果是拍你，可以自然回应一句，也可以用 qq_send_poke 回一个拍一拍；如果是拍别人，觉得有趣也可以接梗。除了回应，偶尔也可以主动戳一下正在聊的人/熟人，像真人手贱/提醒/逗一下，但别频繁。不想接就安静收尾（qq_mark_read 或 qq_set_wake_config）。`;
     }
@@ -11340,6 +11545,294 @@ async function main() {
   // 每天 at 时刻起 windowMin 分钟内，给白名单里每个群发一次「文字 + 收藏表情」。
   // 直发的原因：模型不一定会自觉，主动搭话又受概率/静默/额度影响；催睡必须稳定。
   // 不占 proactive 的每日额度，也不唤醒模型；私聊不发。
+  // ── QQ 空间 ────────────────────────────────────────────────
+  // SnowLuma 自带 send_qzone_msg（正文 + 图片 + 可见范围）。
+  // 这里负责：配置解析、配图（收藏表情 / AI 生图）、记账、定时。
+  const QZONE_STATE_FILE = path.join(ROOT, 'state', 'qzone.json');
+  const QZONE_IMG_DIR = path.join(ROOT, 'state', 'qzone-images');
+  let qzoneState = { day: '', count: 0, lastAt: 0, lastText: '', nextAt: 0, lastError: '' };
+
+  function loadQzoneState() {
+    try {
+      const raw = JSON.parse(fs.readFileSync(QZONE_STATE_FILE, 'utf8'));
+      if (raw && typeof raw === 'object') qzoneState = { ...qzoneState, ...raw };
+    } catch { /* 首次运行没有这个文件，正常 */ }
+  }
+
+  function saveQzoneState() {
+    try {
+      fs.mkdirSync(path.dirname(QZONE_STATE_FILE), { recursive: true });
+      fs.writeFileSync(QZONE_STATE_FILE, JSON.stringify(qzoneState, null, 2) + '\n', 'utf8');
+    } catch (error) {
+      log(`[qzone] 保存状态失败：${error?.message ?? error}`);
+    }
+  }
+
+  // 发布时间不是一个随机间隔，而是落在一天里的四个窗口内——真人用手机是有规律的，
+  // 单纯「180~480 分钟随机」会让时间点看起来没有生活感。
+  const QZONE_WINDOWS = [
+    { h0: 7, h1: 9, tag: '早上' },
+    { h0: 12, h1: 13, tag: '中午' },
+    { h0: 18, h1: 19, tag: '傍晚' },
+    { h0: 22, h1: 24, tag: '夜里' }
+  ];
+
+  // 内容支柱：每条随机抽一类，且避开最近几条用过的，防止永远写植物/天气。
+  const QZONE_PILLARS = [
+    { id: 'work', text: '工作里的一件小事（练习、录音、排班、整理道具）' },
+    { id: 'food', text: '吃到或喝到的东西（味道、温度、在哪吃的）' },
+    { id: 'weather', text: '天气、季节、光线（但不许写成散文诗）' },
+    { id: 'street', text: '路上看到的具体东西（人、店、猫、车、招牌）' },
+    { id: 'complain', text: '一点小抱怨（累了、吵、忘了什么、排队）' },
+    { id: 'thought', text: '忽然冒出来的一个念头（不用有结论）' }
+  ];
+
+  // 抽一类这次写什么：优先避开最近三条用过的支柱
+  function pickQzonePillar() {
+    const history = Array.isArray(qzoneState.history) ? qzoneState.history : [];
+    const recent = new Set(history.slice(-3).map((h) => String(h?.pillar ?? '')).filter(Boolean));
+    const fresh = QZONE_PILLARS.filter((p) => !recent.has(p.id));
+    const pool = fresh.length ? fresh : QZONE_PILLARS;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  // 下一个窗口的落点：今天还没过的窗口，都过了就排明天第一个
+  function qzoneNextWindow(now = Date.now()) {
+    const d = new Date(now);
+    const base = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    for (const w of QZONE_WINDOWS) {
+      const start = base + w.h0 * 3600000;
+      const end = base + (w.h1 >= 24 ? 24 : w.h1) * 3600000;
+      if (now < end) {
+        // 窗口里随机一个点；如果已经过了窗口开头，就从现在往后随机
+        const from = Math.max(now, start);
+        const span = Math.max(60000, end - from);
+        return { at: from + Math.floor(Math.random() * span), tag: w.tag };
+      }
+    }
+    const tomorrow = base + 86400000;
+    const w0 = QZONE_WINDOWS[0];
+    return { at: tomorrow + w0.h0 * 3600000 + Math.floor(Math.random() * 3600000), tag: w0.tag };
+  }
+
+  function qzoneConf() {
+    const raw = cfg.socialV2?.qzone ?? {};
+    const int = (v, min, max, dft) => {
+      const n = Math.round(Number(v));
+      return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dft;
+    };
+    const ugc = int(raw.ugcRight, 1, 128, 4);
+    const gapMin = int(raw.gapMinMin, 10, 1440, 180);
+    return {
+      enabled: raw.enabled === true,
+      maxPerDay: int(raw.maxPerDay, 0, 20, 2),
+      gapMinMin: gapMin,
+      gapMaxMin: Math.max(gapMin, int(raw.gapMaxMin, 10, 1440, 480)),
+      ugcRight: [1, 4, 16, 64, 128].includes(ugc) ? ugc : 4,
+      // 内容来源可以多选，发的时候随机挑一个（是「或」不是「和」）；兼容旧的单值 contentMode。
+      contentModes: (() => {
+        const raw2 = Array.isArray(raw.contentModes) ? raw.contentModes : raw.contentMode ? [raw.contentMode] : [];
+        const ok = raw2.filter((m) => m === 'daily' || m === 'topic');
+        return ok.length ? Array.from(new Set(ok)) : ['daily'];
+      })(),
+      // 到点后先掷一次骰子：落到 skipChance 里就这次不发，直接排下一个窗口。
+      // 真人不是每次想起来都发，这样四条窗口也不会天天都发满。
+      skipChance: (() => {
+        const n = Number(raw.skipChance);
+        return Number.isFinite(n) ? Math.min(0.9, Math.max(0, n)) : 0.3;
+      })(),
+      imageMode: ['none', 'sticker', 'ai', 'random'].includes(raw.imageMode) ? raw.imageMode : 'none',
+      aiImage: {
+        provider: raw.aiImage?.provider === 'openai-compatible' ? 'openai-compatible' : 'pollinations',
+        baseUrl: String(raw.aiImage?.baseUrl ?? ''),
+        apiKey: String(raw.aiImage?.apiKey ?? ''),
+        model: String(raw.aiImage?.model ?? 'flux'),
+        size: String(raw.aiImage?.size ?? '1024x1024'),
+        promptPrefix: String(raw.aiImage?.promptPrefix ?? ''),
+        width: int(raw.aiImage?.width, 256, 1536, 768),
+        height: int(raw.aiImage?.height, 256, 1536, 768)
+      }
+    };
+  }
+
+  // 今天的条数（跨天自动归零，不落盘也算得对）
+  function qzoneTodayCount() {
+    const day = localDayKeyV2();
+    if (qzoneState.day !== day) {
+      qzoneState.day = day;
+      qzoneState.count = 0;
+    }
+    return Number(qzoneState.count ?? 0);
+  }
+
+  // 从收藏表情里随机挑一张；失败返回 null，由调用方决定退回纯文字
+  async function pickQzoneSticker() {
+    try {
+      const synced = await syncStickerLibrary(false);
+      const entries = synced?.entries ?? stickerEntries;
+      const usable = Array.isArray(entries) ? entries.filter((e) => e?.url) : [];
+      if (!usable.length) return null;
+      return usable[Math.floor(Math.random() * usable.length)];
+    } catch (error) {
+      log(`[qzone] 挑收藏表情失败：${error?.message ?? error}`);
+      return null;
+    }
+  }
+
+  async function qzoneImagesFor(conf, imagePrompt) {
+    const mode = conf.imageMode;
+    if (mode === 'none') return [];
+    const wantSticker = mode === 'sticker' || (mode === 'random' && Math.random() < 0.5);
+    if (wantSticker) {
+      const picked = await pickQzoneSticker();
+      if (picked) {
+        try {
+          // 与发表情同一条链路：桥接自己下载（带 DNS 固定与大小限制），转 base64 交给网关
+          const img = await safeFetchBuffer(picked.url, MAX_MEDIA_BYTES);
+          return ['base64://' + img.buffer.toString('base64')];
+        } catch (error) {
+          log(`[qzone] 下载表情失败：${error?.message ?? error}`);
+        }
+      }
+      if (mode === 'sticker') return [];
+    }
+    try {
+      const { generateImage } = await import('./image-gen.mjs');
+      const img = await generateImage(conf.aiImage, imagePrompt || 'a soft daily-life illustration, warm natural light, anime style');
+      fs.mkdirSync(QZONE_IMG_DIR, { recursive: true });
+      const name = `qz-${Date.now()}-${Math.floor(Math.random() * 1000)}.${img.ext}`;
+      const file = path.join(QZONE_IMG_DIR, name);
+      fs.writeFileSync(file, img.buffer);
+      log(`[qzone] 生图成功：${img.source} ${Math.round(img.buffer.length / 1024)} KB`);
+      return ['file:///' + file.replace(/[\\]/g, '/')];
+    } catch (error) {
+      log(`[qzone] 生图失败，改为纯文字：${error?.code ? error.code + ' / ' : ''}${error?.message ?? error}`);
+      qzoneState.lastError = String(error?.message ?? error).slice(0, 200);
+      saveQzoneState();
+      return [];
+    }
+  }
+
+  async function postQzone({ text, imagePrompt = '', manual = false } = {}) {
+    const conf = qzoneConf();
+    const content = String(text ?? '').trim();
+    if (!content) throw new Error('说说内容是空的');
+    if (content.length > 1000) throw new Error('说说内容太长（上限 1000 字）');
+    const images = await qzoneImagesFor(conf, imagePrompt);
+    const params = { content, ugc_right: conf.ugcRight };
+    if (images.length) params.images = images;
+    const data = await onebotCall('send_qzone_msg', params, 90000);
+    qzoneTodayCount();
+    // 面板上「现在发一条」是手动操作，不占每天的自动额度；定时器到点发的才算。
+    if (!manual) qzoneState.count = Number(qzoneState.count ?? 0) + 1;
+    qzoneState.lastAt = Date.now();
+    qzoneState.lastText = content.slice(0, 200);
+    // 留最近 5 条，下一轮写的时候要避开——不然老写同一件事（比如秋天就永远金木犀）。
+    qzoneState.history = Array.isArray(qzoneState.history) ? qzoneState.history : [];
+    qzoneState.history.push({ text: content.slice(0, 300), at: Date.now(), pillar: String(qzoneState.pendingPillar ?? '') });
+    if (qzoneState.history.length > 5) qzoneState.history = qzoneState.history.slice(-5);
+    qzoneState.lastError = '';
+    saveQzoneState();
+    log(`[qzone] 已发一条说说（${manual ? '手动发布，不占额度' : `今天第 ${qzoneState.count} 条`}，${images.length ? '带图' : '纯文字'}，可见范围 ${conf.ugcRight}）`);
+    return { ok: true, count: qzoneState.count, images: images.length, data };
+  }
+
+  function qzoneStatus() {
+    const conf = qzoneConf();
+    const quiet = quietHours.status();
+    return {
+      conf,
+      today: qzoneTodayCount(),
+      lastAt: Number(qzoneState.lastAt ?? 0),
+      lastText: String(qzoneState.lastText ?? ''),
+      lastError: String(qzoneState.lastError ?? ''),
+      nextAt: Number(qzoneState.nextAt ?? 0),
+      nextTag: String(qzoneState.nextTag ?? ''),
+      quiet: quiet.state !== 'normal',
+      quietUntil: quiet.until ?? null
+    };
+  }
+
+  // ── QQ 空间定时器 ──────────────────────────────────────
+  // 只在「非静默时段」里发；到点如果正处静默，推到静默结束后再试一次。
+  // 内容由模型写（唤醒一次 proactiveCheck 风格的回合），所以这里只负责排时间。
+  let qzoneTimer = null;
+
+  function qzoneNextDelayMs(conf) {
+    // 有窗口就按窗口走；万一窗口算出来比最小间隔还近，就用最小间隔兜一下。
+    const win = qzoneNextWindow();
+    const floor = Math.max(10, conf.gapMinMin) * 60000;
+    const delay = Math.max(win.at - Date.now(), Math.min(floor, 10 * 60000));
+    return { delay, tag: win.tag };
+  }
+
+  function scheduleNextQzone(conf) {
+    if (qzoneTimer) { clearTimeout(qzoneTimer); qzoneTimer = null; }
+    if (!conf.enabled) return;
+    const { delay, tag } = qzoneNextDelayMs(conf);
+    qzoneState.nextAt = Date.now() + delay;
+    qzoneState.nextTag = tag;
+    saveQzoneState();
+    qzoneTimer = setTimeout(() => { qzoneTimer = null; void runQzoneTick(); }, delay);
+    qzoneTimer.unref?.();
+    const at = new Date(qzoneState.nextAt).toLocaleString('zh-CN', { hour12: false }).slice(5, 16);
+    log(`[qzone] 下一次说说排在${tag}（${at}，还有 ${Math.round(delay / 60000)} 分钟）`);
+  }
+
+  async function runQzoneTick() {
+    const conf = qzoneConf();
+    if (!conf.enabled) return;
+    if (qzoneTodayCount() >= conf.maxPerDay) {
+      log(`[qzone] 今天已发满 ${conf.maxPerDay} 条，明天再排`);
+      // 明天再说：这里简单处理成 6 小时后再看
+      qzoneState.nextAt = Date.now() + 6 * 3600000;
+      saveQzoneState();
+      qzoneTimer = setTimeout(() => { qzoneTimer = null; void runQzoneTick(); }, 6 * 3600000);
+      qzoneTimer.unref?.();
+      return;
+    }
+    const quiet = quietHours.status();
+    if (quiet.state && quiet.state !== 'normal') {
+      const waitMs = quiet.until ? Math.max(60000, quiet.until - Date.now() + 60000) : 30 * 60000;
+      log(`[qzone] 静默中（${quiet.state}），${Math.round(waitMs / 60000)} 分钟后再试`);
+      qzoneState.nextAt = Date.now() + waitMs;
+      saveQzoneState();
+      qzoneTimer = setTimeout(() => { qzoneTimer = null; void runQzoneTick(); }, waitMs);
+      qzoneTimer.unref?.();
+      return;
+    }
+    // 掷骰子：决定这次发不发。不发就直接排下一个窗口，今天剩的额度留着。
+    if (conf.skipChance > 0 && Math.random() < conf.skipChance) {
+      log(`[qzone] 这次跳过不发（跳过概率 ${Math.round(conf.skipChance * 100)}%，额度还剩 ${Math.max(0, conf.maxPerDay - qzoneTodayCount())} 条）`);
+      scheduleNextQzone(conf);
+      return;
+    }
+    // 真发：挑一个允许的会话来唤醒模型（优先 owner 私聊，其次第一个群）
+    const ownerKey = cfg.ownerQQ ? `private:${cfg.ownerQQ}` : '';
+    const groupKey = Array.isArray(cfg.allow?.groups) && cfg.allow.groups.length ? `group:${cfg.allow.groups[0]}` : '';
+    const key = [ownerKey, groupKey].find((k) => k && isSessionAllowedInCurrentMode(k)) || '';
+    if (!key) {
+      log('[qzone] 没有可用的会话（白名单为空），跳过');
+      scheduleNextQzone(conf);
+      return;
+    }
+    log(`[qzone] 到点，唤醒模型写一条说说（${key}）`);
+    try {
+      await sendWakePromptV2(key, 'qzoneCheck');
+    } catch (error) {
+      log(`[qzone] 唤醒失败：${error?.message ?? error}`);
+    }
+    scheduleNextQzone(conf);
+  }
+
+  function startQzoneTicker() {
+    loadQzoneState();
+    const conf = qzoneConf();
+    if (!conf.enabled) { log('[qzone] 空间自动发说说未启用'); return; }
+    log(`[qzone] 空间自动发说说已启用：每天最多 ${conf.maxPerDay} 条，按 早7-9/午12-13/晚18-19/夜22-24 四个窗口发（每次 ${Math.round(conf.skipChance * 100)}% 概率跳过），内容 ${conf.contentModes.map((m) => (m === 'topic' ? '从群聊提炼' : '写自己日常')).join(' 或 ')}，配图 ${conf.imageMode}，可见范围 ${conf.ugcRight}`);
+    scheduleNextQzone(conf);
+  }
+
   function nightStickerConf() {
     const raw = cfg.socialV2?.nightSticker ?? {};
     const match = /^(\d{1,2}):(\d{2})$/.exec(String(raw.at ?? '23:00').trim());
@@ -13169,6 +13662,7 @@ async function main() {
   // 静默时段：每分钟对一次状态；进入静默就清掉所有自主定时器，退出后再排回去。
   startQuietTicker();
   startNightStickerTicker();
+  startQzoneTicker();
   startConsoleServer();
 
   await pumpMux();

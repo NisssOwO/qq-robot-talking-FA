@@ -1397,4 +1397,33 @@ if (cfg.socialV2?.tools?.getForwardMsg !== false) {
   );
 }
 
+server.tool(
+  'qq_post_qzone',
+  '在机器人自己的 QQ 空间发一条说说。正文自己写（三十到八十字，不要问候语、不要提群友），配图由桥接按 imagePrompt 决定（可能是收藏表情、也可能是现生成一张图；也可能这次不配图）。发完不要在群里额外说明。',
+  {
+    content: z.string().min(1).max(1000).describe('说说正文'),
+    imagePrompt: z.string().max(400).optional().describe('英文画面描述，配图模式为 AI 生图时用它出图；纯文字或表情模式可以留空'),
+    token: z.string().min(1).describe('本轮的会话令牌（见提示词里的【会话令牌】）')
+  },
+  async ({ content, imagePrompt, token }) => {
+    try {
+      const data = await agentApi('/api/qzone/ai-post', {
+        method: 'POST',
+        headers: { 'x-agent-token': String(token) },
+        body: JSON.stringify({ text: String(content), imagePrompt: imagePrompt ? String(imagePrompt) : '' }),
+        timeoutMs: 120000
+      });
+      const withImg = Number(data?.images ?? 0) > 0;
+      return {
+        content: [{
+          type: 'text',
+          text: `已发到 QQ 空间（今天第 ${data?.count ?? '?'} 条${withImg ? '，带图' : '，纯文字'}）。`
+        }]
+      };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `发说说失败：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
 await server.connect(new StdioServerTransport());

@@ -472,6 +472,7 @@ const NAV = [
     { id: 'quiet',    label: '静默时间', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 019.5 4a8.5 8.5 0 108.9 11.4 8.5 8.5 0 011.6-.9z"/></svg>' },
     { id: 'personalize', label: '个性', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M12 3l2.2 5.6L20 11l-5.8 2.4L12 19l-2.2-5.6L4 11l5.8-2.4z"/></svg>' },
     { id: 'chat', label: '聊天行为', svg: '<svg viewBox="0 0 24 24"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.9 8.9 0 0 1-4-.9L3 21l1.9-4.7A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4z"/><path d="M8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01"/></svg>', self: true },
+      { id: 'qzone', label: 'QQ空间', svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 13h8M8 9h5"/></svg>', self: true },
     { id: 'social-v2', label: '二代仿真', svg: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3.5 19c0-3 2.5-4.8 5.5-4.8s5.5 1.8 5.5 4.8"/><path d="M16 14.4c2.4 0 4.5 1.3 4.5 3.6"/></svg>' },
     { id: 'social-v1', label: '一代仿真', svg: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="14" rx="2"/><path d="M8 20h8M9 9h6M9 13h4"/></svg>' },
     { id: 'slang',    label: '黑话词库', svg: '<svg viewBox="0 0 24 24"><path d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"/></svg>' }
@@ -1166,6 +1167,421 @@ chatView.innerHTML = head('CHAT BEHAVIOR', '聊天行为', '她什么时候自�
 `;
 $('main').appendChild(chatView);
 
+const qzoneView = document.createElement('section');
+qzoneView.className = 'view pad';
+qzoneView.dataset.view = 'qzone';
+qzoneView.innerHTML = head('QZONE', '空间', '到点让她自己发一条说说；只在非静默时段发。') + `
+  <div class="card">
+    <div class="live">
+      <i class="led" id="qz-led"></i>
+      <div style="min-width:170px">
+        <div class="live-state" id="qz-state">未启用</div>
+        <div class="live-sub" id="qz-sub">到点她自己发一条，只在非静默时段。</div>
+      </div>
+      <div class="live-facts" id="qz-facts">
+        <div><span>今天</span><strong id="qz-today">— / —</strong></div>
+        <div><span>上次</span><strong id="qz-last">—</strong></div>
+        <div><span>下一次</span><strong id="qz-next">—</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <div class="card-head"><div class="card-title">开关与额度</div></div>
+      <label class="opt">
+        <div><div class="opt-name">启用自动发说说</div><div class="opt-sub">到点唤醒模型写一条，发完再排下一次。静默时段自动跳过。</div></div>
+        <span class="switch"><input type="checkbox" id="qz-enabled"></span>
+      </label>
+      <div class="formgrid">
+        <div class="field">
+          <label>每天最多几条</label>
+          <input type="number" id="qz-max" min="0" max="20" step="1" placeholder="2">
+          <div class="hint">0 = 不限制，但不建议</div>
+        </div>
+        <div class="field">
+          <label>什么时候发</label>
+          <div class="hint" style="margin-top:2px;line-height:1.8">早 7-9 · 午 12-13 · 晚 18-19 · 夜 22-24<br>每个窗口随机一个时间点；发满当天的条数就停，隔天重新从早上开始。</div>
+        </div>
+        <div class="field">
+          <label>每次跳过的概率</label>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input type="number" id="qz-skip" min="0" max="90" step="5" placeholder="30" style="width:100%">
+            <span style="color:var(--muted)">%</span>
+          </div>
+          <div class="hint">到点先掷骰子：跳过了就不发，直接排下一个窗口，今天的额度留着。0 = 每次都发</div>
+        </div>
+      </div>
+      <div class="field-actions">
+        <button class="btn primary" id="qz-save" type="button">保存设置</button>
+        <span class="hint">改完立即生效，不用重启。</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div class="card-title">写什么 · 配什么图</div></div>
+      <div class="formgrid">
+        <div class="field">
+          <label>内容从哪来</label>
+          <label class="choice" style="border:0;padding:4px 0">
+            <input type="checkbox" id="qz-mode-daily" checked>
+            <span class="choice-txt"><b>写自己的日常</b>练习、录音、路上看到的、吃到的小事</span>
+          </label>
+          <label class="choice" style="border:0;padding:4px 0">
+            <input type="checkbox" id="qz-mode-topic">
+            <span class="choice-txt"><b>从最近的群聊里提炼一个话题</b>只留感受，不提是谁说的</span>
+          </label>
+          <div class="hint">两个都勾 = 每次随机挑一个（是「或」不是「和」），至少勾一个</div>
+        </div>
+        <div class="field">
+          <label>配图</label>
+          <select id="qz-image">
+            <option value="none">不配图（纯文字）</option>
+            <option value="sticker">从 QQ 收藏表情里随机挑一张</option>
+            <option value="ai">AI 生成一张</option>
+            <option value="random">上面三种随机</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>谁可以看到</label>
+        <select id="qz-ugc">
+          <option value="4">好友可见（推荐）</option>
+          <option value="1">所有人可见</option>
+          <option value="64">仅自己可见</option>
+        </select>
+        <div class="hint">说说是公开的，模型写的内容没人先看过，默认好友可见比较稳</div>
+      </div>
+    </section>
+
+    <section class="card span2">
+      <div class="card-head"><div class="card-title">AI 生图</div><span class="count">配图选「AI 生成」时才用</span></div>
+      <div class="field">
+        <label>用哪个后端</label>
+        <label class="choice" style="border:0;padding:4px 0">
+          <input type="radio" name="qz-ai-provider" value="pollinations" id="qz-ai-pollinations">
+          <span class="choice-txt"><b>pollinations（免费，不用 key）</b>图上有水印，出一张约 1 秒</span>
+        </label>
+        <label class="choice" style="border:0;padding:4px 0">
+          <input type="radio" name="qz-ai-provider" value="openai-compatible" id="qz-ai-openai">
+          <span class="choice-txt"><b>OpenAI 兼容接口（自己填 key）</b>GPT-image / DALL·E / 各种中转都走这套</span>
+        </label>
+      </div>
+      <div id="qz-ai-api" hidden>
+        <div class="formgrid">
+          <div class="field">
+            <label>接口地址</label>
+            <input type="text" id="qz-ai-baseurl" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="field">
+            <label>API Key <span class="hint" id="qz-ai-mask"></span></label>
+            <input type="password" id="qz-ai-key" placeholder="留空表示不修改">
+          </div>
+        </div>
+        <div class="field">
+          <label>模型</label>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input type="text" id="qz-ai-model" placeholder="gpt-image-1" autocomplete="off" spellcheck="false" style="flex:1;min-width:200px">
+            <button class="btn mini" id="qz-ai-fetch" type="button">获取可用模型</button>
+            <span class="hint" id="qz-ai-hint"></span>
+          </div>
+          <div id="qz-ai-chips" class="chips"></div>
+        </div>
+        <div class="field">
+          <label>尺寸</label>
+          <input type="text" id="qz-ai-size" placeholder="1024x1024" autocomplete="off">
+        </div>
+      </div>
+      <div class="formgrid">
+        <div class="field">
+          <label>画面风格前缀（可选）</label>
+          <input type="text" id="qz-ai-prefix" placeholder="soft anime illustration, warm light" autocomplete="off">
+          <div class="hint">会拼在模型写的画面描述前面</div>
+        </div>
+        <div class="field">
+          <label>pollinations 尺寸</label>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input type="number" id="qz-ai-w" min="256" max="1536" step="64" placeholder="768" style="width:100%">
+            <span style="color:var(--muted)">×</span>
+            <input type="number" id="qz-ai-h" min="256" max="1536" step="64" placeholder="768" style="width:100%">
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card span2">
+      <div class="card-head"><div class="card-title">最近发过</div><span class="spacer"></span><button class="btn mini" id="qz-recent-refresh" type="button">刷新</button></div>
+      <div class="list" id="qz-recent-list"></div>
+    </section>
+
+    <section class="card span2">
+      <div class="card-head"><div class="card-title">马上发一条</div><span class="count">内容由她自己写</span></div>
+      <div class="field">
+        <label class="choice" style="border:0;padding:4px 0">
+          <input type="checkbox" id="qz-force">
+          <span class="choice-txt">静默时段也发</span>
+        </label>
+        <div class="hint">点下去会唤醒她，按上面选的来源写一条，约 3～10 秒后出现在空间</div>
+      </div>
+      <div class="field-actions">
+        <button class="btn primary" id="qz-post" type="button">现在发一条</button>
+        <span class="hint" id="qz-toast"></span>
+      </div>
+    </section>
+  </div>
+`;
+$('main').appendChild(qzoneView);
+
+function qzFmtTime(ms) {
+  if (!ms) return '—';
+  const d = new Date(ms);
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+
+function qzFmtAgo(ms) {
+  if (!ms) return '还没发过';
+  const diff = Date.now() - ms;
+  if (diff < 60000) return '刚刚';
+  if (diff < 3600000) return Math.round(diff / 60000) + ' 分钟前';
+  if (diff < 86400000) return Math.round(diff / 3600000) + ' 小时前';
+  return Math.round(diff / 86400000) + ' 天前';
+}
+
+function qzFill(st) {
+  const c = st.conf || {};
+  const enabled = c.enabled === true;
+  if ($('qz-enabled')) $('qz-enabled').checked = enabled;
+  if ($('qz-max')) $('qz-max').value = c.maxPerDay ?? 2;
+  if ($('qz-skip')) $('qz-skip').value = Math.round((c.skipChance ?? 0.3) * 100);
+  // 发布时刻现在由时间窗口决定（早/午/晚/夜），不再有「间隔」输入框；旧值仍留在配置里兜底。
+  const modes = Array.isArray(c.contentModes) && c.contentModes.length ? c.contentModes : ['daily'];
+  if ($('qz-mode-daily')) $('qz-mode-daily').checked = modes.includes('daily');
+  if ($('qz-mode-topic')) $('qz-mode-topic').checked = modes.includes('topic');
+  if ($('qz-image')) $('qz-image').value = c.imageMode || 'none';
+  if ($('qz-ugc')) $('qz-ugc').value = String(c.ugcRight ?? 4);
+
+  const ai = c.aiImage || {};
+  const isOpenAi = ai.provider === 'openai-compatible';
+  if ($('qz-ai-pollinations')) $('qz-ai-pollinations').checked = !isOpenAi;
+  if ($('qz-ai-openai')) $('qz-ai-openai').checked = isOpenAi;
+  if ($('qz-ai-api')) $('qz-ai-api').hidden = !isOpenAi;
+  if ($('qz-ai-baseurl')) $('qz-ai-baseurl').value = ai.baseUrl || '';
+  if ($('qz-ai-model')) $('qz-ai-model').value = ai.model || 'flux';
+  if ($('qz-ai-size')) $('qz-ai-size').value = ai.size || '1024x1024';
+  if ($('qz-ai-prefix')) $('qz-ai-prefix').value = ai.promptPrefix || '';
+  if ($('qz-ai-w')) $('qz-ai-w').value = ai.width ?? 768;
+  if ($('qz-ai-h')) $('qz-ai-h').value = ai.height ?? 768;
+  if ($('qz-ai-mask')) $('qz-ai-mask').textContent = ai.apiKey ? '（已设置，留空不改）' : '（未设置）';
+
+  const led = $('qz-led');
+  if (led) led.className = 'led' + (enabled ? ' ok' : '');
+  if ($('qz-state')) $('qz-state').textContent = enabled ? (st.quiet ? '静默中，暂停' : '已启用') : '未启用';
+  if ($('qz-sub')) {
+    $('qz-sub').textContent = st.quiet
+      ? '现在是静默时段，到点会自动跳过。'
+      : '到点她自己发一条，只在非静默时段。';
+  }
+  if ($('qz-today')) $('qz-today').textContent = (st.today ?? 0) + ' / ' + (c.maxPerDay ?? 2) + ' 条';
+  if ($('qz-last')) $('qz-last').textContent = qzFmtAgo(st.lastAt);
+  if ($('qz-next')) $('qz-next').textContent = st.nextAt ? '约 ' + qzFmtTime(st.nextAt) : '—';
+  if (st.lastError && $('qz-sub')) $('qz-sub').textContent = '上次出错：' + st.lastError;
+}
+
+// 上一次从 /api/qzone/status 读到的配置。发布时刻已改由时间窗口决定，
+// 「间隔」两个值不再有输入框，保存时沿用配置里的旧值（后端仍会收下，只当兜底）。
+let lastQzoneConf = null;
+
+async function loadQzone() {
+  try {
+    const st = await consoleFetch('/api/qzone/status');
+    lastQzoneConf = st.conf || null;
+    qzFill(st);
+    void loadQzoneRecent();
+  } catch (error) {
+    if ($('qz-state')) $('qz-state').textContent = '读不到状态';
+    if ($('qz-sub')) $('qz-sub').textContent = String(error?.message ?? error);
+  }
+}
+
+async function saveQzone() {
+  const provider = $('qz-ai-openai')?.checked ? 'openai-compatible' : 'pollinations';
+  const body = {
+    enabled: !!$('qz-enabled')?.checked,
+    maxPerDay: Number($('qz-max')?.value) || 0,
+    skipChance: Math.min(0.9, Math.max(0, (Number($('qz-skip')?.value) || 0) / 100)),
+    gapMinMin: lastQzoneConf?.gapMinMin ?? 180,
+    gapMaxMin: lastQzoneConf?.gapMaxMin ?? 480,
+    contentModes: (() => {
+      const picked = [];
+      if ($('qz-mode-daily')?.checked) picked.push('daily');
+      if ($('qz-mode-topic')?.checked) picked.push('topic');
+      return picked.length ? picked : ['daily'];
+    })(),
+    imageMode: $('qz-image')?.value || 'none',
+    ugcRight: Number($('qz-ugc')?.value) || 4,
+    aiImage: {
+      provider,
+      baseUrl: $('qz-ai-baseurl')?.value?.trim() || '',
+      model: $('qz-ai-model')?.value?.trim() || 'flux',
+      size: $('qz-ai-size')?.value?.trim() || '1024x1024',
+      promptPrefix: $('qz-ai-prefix')?.value?.trim() || '',
+      width: Number($('qz-ai-w')?.value) || 768,
+      height: Number($('qz-ai-h')?.value) || 768
+    }
+  };
+  const key = $('qz-ai-key')?.value?.trim();
+  if (key) body.aiImage.apiKey = key;
+  try {
+    const st = await consoleFetch('/api/qzone/config', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if ($('qz-ai-key')) $('qz-ai-key').value = '';
+    qzFill(st);
+    if ($('qz-toast')) $('qz-toast').textContent = '已保存 ' + qzFmtTime(Date.now());
+  } catch (error) {
+    if ($('qz-toast')) $('qz-toast').textContent = '保存失败：' + (error?.message ?? error);
+  }
+}
+
+async function postQzoneNow() {
+  const force = !!$('qz-force')?.checked;
+  const btn = $('qz-post');
+  if (btn) btn.disabled = true;
+  if ($('qz-toast')) $('qz-toast').textContent = '正在叫醒她…';
+  try {
+    const r = await consoleFetch('/api/qzone/trigger', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ force })
+    });
+    if ($('qz-toast')) $('qz-toast').textContent = r?.queued
+      ? '她正在忙，排队中了，忙完就发'
+      : '已叫她去写，几秒后看空间（' + (r?.key ?? '') + '）';
+    setTimeout(() => void loadQzone(), 8000);
+  } catch (error) {
+    if ($('qz-toast')) $('qz-toast').textContent = '失败：' + (error?.message ?? error);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function askAiQzone() {
+  const force = !!$('qz-force')?.checked;
+  try {
+    const r = await consoleFetch('/api/qzone/trigger', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ force })
+    });
+    if ($('qz-toast')) $('qz-toast').textContent = '已叫她去写，几秒后看空间';
+  } catch (error) {
+    if ($('qz-toast')) $('qz-toast').textContent = '失败：' + (error?.message ?? error);
+  }
+}
+
+async function fetchQzImageModels() {
+  const baseUrl = $('qz-ai-baseurl')?.value?.trim() || '';
+  const apiKey = $('qz-ai-key')?.value?.trim() || '';
+  const hint = $('qz-ai-hint');
+  if (hint) hint.textContent = '拉取中…';
+  try {
+    const r = await api('image-models', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ baseUrl, apiKey })
+    });
+    const list = r.models || [];
+    if (hint) hint.textContent = list.length
+      ? list.length + ' 个' + (r.filtered ? '（已按生图模型筛选）' : '（没识别出生图模型，全部列出）') + ' · ' + r.ms + 'ms'
+      : '没拿到模型';
+    const box = $('qz-ai-chips');
+    if (box) {
+      box.innerHTML = '';
+      for (const m of list) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'chip';
+        b.textContent = m;
+        b.onclick = () => { if ($('qz-ai-model')) $('qz-ai-model').value = m; };
+        box.appendChild(b);
+      }
+    }
+    if (list.length && !$('qz-ai-model')?.value) $('qz-ai-model').value = list[0];
+  } catch (error) {
+    if (hint) hint.textContent = '失败：' + (error?.message ?? error);
+  }
+}
+
+async function loadQzoneRecent() {
+  const box = $('qz-recent-list');
+  if (!box) return;
+  box.innerHTML = '<div class="empty" style="padding:20px"><div class="empty-title">读取中…</div></div>';
+  try {
+    const r = await consoleFetch('/api/qzone/recent');
+    const items = Array.isArray(r.items) ? r.items : [];
+    if (!items.length) {
+      box.innerHTML = '<div class="empty" style="padding:28px"><div class="empty-icon">○</div><div class="empty-title">空间里还没有说说</div>等她发第一条就会出现在这里。</div>';
+      return;
+    }
+    box.innerHTML = '';
+    items.forEach((it, idx) => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.style.gridTemplateColumns = '110px 1fr auto';
+      const when = document.createElement('div');
+      when.className = 'num';
+      when.style.fontSize = '12px';
+      when.textContent = it.at ? new Date(it.at * 1000).toLocaleString('zh-CN', { hour12: false }).slice(5, 16) : '#' + (idx + 1);
+      const body = document.createElement('div');
+      body.className = 'remark-text';
+      body.style.whiteSpace = 'pre-wrap';
+      body.style.fontSize = '12.5px';
+      body.textContent = String(it.content || '').slice(0, 160);
+      const del = document.createElement('button');
+      del.className = 'btn mini danger';
+      del.type = 'button';
+      del.textContent = '删除';
+      del.onclick = () => void deleteQzoneItem(it.tid, String(it.content || '').slice(0, 30));
+      row.appendChild(when);
+      row.appendChild(body);
+      row.appendChild(del);
+      box.appendChild(row);
+    });
+  } catch (error) {
+    box.innerHTML = '<div class="empty" style="padding:20px"><div class="empty-title">读不到</div>' + String(error?.message ?? error) + '</div>';
+  }
+}
+
+async function deleteQzoneItem(tid, preview) {
+  const ok = await askConfirm({
+    title: '删掉这条说说？',
+    body: '「' + preview + '…」<br>删了就没了，空间里也看不到。',
+    okText: '确认删除'
+  });
+  if (!ok) return;
+  try {
+    await consoleFetch('/api/qzone/delete', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tid })
+    });
+    if ($('qz-toast')) $('qz-toast').textContent = '已删除';
+    await loadQzoneRecent();
+  } catch (error) {
+    if ($('qz-toast')) $('qz-toast').textContent = '删除失败：' + (error?.message ?? error);
+  }
+}
+
+if ($('qz-recent-refresh')) $('qz-recent-refresh').onclick = () => void loadQzoneRecent();
+
+if ($('qz-ai-openai')) $('qz-ai-openai').onchange = () => { if ($('qz-ai-api')) $('qz-ai-api').hidden = false; };
+if ($('qz-ai-pollinations')) $('qz-ai-pollinations').onchange = () => { if ($('qz-ai-api')) $('qz-ai-api').hidden = true; };
+if ($('qz-save')) $('qz-save').onclick = () => void saveQzone();
+if ($('qz-post')) $('qz-post').onclick = () => void postQzoneNow();
+if ($('qz-ai-fetch')) $('qz-ai-fetch').onclick = () => void fetchQzImageModels();
+
 // ── 自建页：角色包 ──────────────────────────────────────
 const rolepackView = document.createElement('section');
 rolepackView.className = 'view pad';
@@ -1229,6 +1645,7 @@ function go(id) {
     if (id === 'quiet') void loadQuiet();
     if (id === 'close') void loadCloseSetting();
     if (id === 'chat') void loadChat();
+    if (id === 'qzone') void loadQzone();
     if (id === 'qq') void loadQQ();
     if (id === 'personalize') void loadPersonalize();
     if (id === 'allow') void loadScope();

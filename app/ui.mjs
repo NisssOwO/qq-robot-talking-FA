@@ -889,6 +889,32 @@ const server = http.createServer(async (req, res) => {
           return json(res, 502, { ok: false, error: `拉取模型列表失败：${msg}` });
         }
       }
+      if (sub === 'image-models' && (req.method === 'GET' || req.method === 'POST')) {
+        // 生图模型的「获取可用模型」：跟语言模型那个一样，拿 baseUrl + key 问 /models，
+        // 但结果按名字粗筛一遍（image/dall/flux/sd/kolors/wanx/seedream 之类）。
+        const input = req.method === 'POST'
+          ? JSON.parse((await readBody(req)) || '{}')
+          : Object.fromEntries(url.searchParams.entries());
+        const cfg = readConfig() ?? {};
+        const baseUrl = String(input.baseUrl ?? '').trim() || String(cfg.socialV2?.qzone?.aiImage?.baseUrl ?? '').trim();
+        const apiKey = String(input.apiKey ?? '').trim();
+        if (!baseUrl) return json(res, 400, { ok: false, error: '先填生图接口地址' });
+        if (!apiKey) return json(res, 400, { ok: false, error: '先填生图 API Key' });
+        const started = Date.now();
+        try {
+          const { listImageModels } = await import('../src/image-gen.mjs');
+          const result = await listImageModels({ baseUrl, apiKey });
+          return json(res, 200, {
+            ok: true,
+            models: result.models,
+            filtered: result.filtered,
+            total: result.total,
+            ms: Date.now() - started
+          });
+        } catch (error) {
+          return json(res, 502, { ok: false, error: String(error?.message ?? error) });
+        }
+      }
       if (sub === 'tts-models' && (req.method === 'GET' || req.method === 'POST')) {
         const ttsCfg = (readConfig() ?? {}).tts ?? {};
         const engines = ['s2.1-pro-free', 's2-pro', 'speech-1.6', 'speech-1.5', 's1'];
