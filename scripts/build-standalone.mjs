@@ -119,6 +119,13 @@ function step(label, fn) {
 // 1) 源码
 step('src', () => copyDir(path.join(ROOT, 'src'), path.join(OUT, 'src'), { filter: (name) => !/[.]bak-|[.]orig$|^[.]DS_Store$/.test(name) }));
 
+// 1a) 版本号写进发布包（面板「版本与更新」读它；发布包里没有 package.json）
+{
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  fs.writeFileSync(path.join(OUT, 'VERSION'), `${pkg.version || ''}\n`, 'utf8');
+  report.push(`VERSION: ${pkg.version}`);
+}
+
 // 1b) 配置向导（app/setup.mjs，start.bat 起不来时先开它）
 step('app', () => copyDir(path.join(ROOT, 'app'), path.join(OUT, 'app'), { filter: (name) => !/[.]bak-|[.]orig$|^[.]DS_Store$/.test(name) }));
 

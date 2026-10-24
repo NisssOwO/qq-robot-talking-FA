@@ -529,7 +529,7 @@ async function updateInfo({ force = false } = {}) {
     app: {
       version: now,
       latest: appRelease.version || '',
-      url: appRelease.url || 'https://github.com/Derpyu520/qq-bridge/releases',
+      url: appRelease.url || 'https://github.com/NisssOwO/qq-robot-talking-FA/releases',
       checkedAt: appRelease.checkedAt || 0,
       error: appRelease.error || '',
       updateAvailable: !!(now && appRelease.version && cmpVersion(now, appRelease.version) < 0)
