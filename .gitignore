@@ -53,3 +53,6 @@ docs/LONG-MEMORY-TODO.md
 # 本机签名证书：私钥绝不能进仓库
 .local/
 *.pfx
+
+# 个人角色卡，不进仓库也不进发布包
+roles/芹泽朝日.*
