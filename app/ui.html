@@ -1850,7 +1850,7 @@ rolepackView.innerHTML = head('ROLE PACK', '角色包', '音色、唤醒别名�
     <div class="field">
       <div class="field-actions">
         <button class="primary" id="rp-save">保存角色包</button>
-        <button id="rp-fill" class="btn mini">用当前配置填充</button>
+        <button id="rp-fill" class="btn mini">复制当前角色的配置</button>
         <button class="danger" id="rp-del">删除角色包</button>
       </div>
       <div class="hint">保存后立刻生效：桥接每次合成前都会重新读角色包，不用重启。</div>
@@ -2804,12 +2804,24 @@ async function loadRolePacks() {
   }
 }
 
+// 「复制当前角色的配置」：把「现在启用的那个角色」已经保存的 pack 抄进表单，
+// 用来给新角色（比如建了个副本）快速打底——改改名字和别名就能用。
+// 选中的角色本身就是当前启用角色时，等价于「恢复到已保存的版本」。
 $('rp-fill').onclick = function () {
-  const d = rpState.defaults || {};
-  if (!$('rp-voice').value && d.voiceId) $('rp-voice').value = d.voiceId;
-  if (!$('rp-aliases').value && Array.isArray(d.aliases) && d.aliases.length) $('rp-aliases').value = d.aliases.join('\n');
-  if (!$('rp-world').value) $('rp-world').value = $('rp-role').value;
-  $('rp-toast').textContent = '已用当前配置填充，再点「保存角色包」写入';
+  const role = $('rp-role').value;
+  if (!role) { $('rp-toast').textContent = '先从左边选一个角色'; return; }
+  const cur = rpState.roles.find((r) => r.name === rpState.current);
+  if (!cur || !cur.hasPack) {
+    $('rp-toast').textContent = '当前启用的角色「' + (rpState.current || '（还没设）') + '」没有角色包，没有可复制的内容';
+    return;
+  }
+  $('rp-voice').value = cur.voiceId || '';
+  $('rp-aliases').value = (cur.aliases || []).join('\n');
+  $('rp-dict').value = cur.dictionary ? JSON.stringify(cur.dictionary, null, 2) : '';
+  $('rp-world').value = cur.worldName || '';
+  $('rp-toast').textContent = cur.name === role
+    ? '已恢复成「' + cur.name + '」当前保存的角色包（没保存的改动已丢弃）'
+    : '已复制「' + cur.name + '」的配置过来；别名里还带着原角色的叫法，改完点「保存角色包」写到「' + role + '」';
 };
 
 $('rp-save').onclick = async function () {

@@ -1,6 +1,6 @@
 {
   "name": "qq-robot-talking-fa",
-  "version": "1.0.7.fix",
+  "version": "1.0.7.fix2",
   "private": true,
   "license": "MIT",
   "description": "独立版 QQ 聊天机器人：自带 QQ 网关与控制面板，角色包与日语语音，双击即可运行。",
