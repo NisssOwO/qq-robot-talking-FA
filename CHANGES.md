@@ -1,5 +1,12 @@
 # 变更记录
 
+## 1.0.7.fix — 2026-10-25
+
+### 修复
+
+- **压缩历史时切出孤儿工具消息，整个会话卡在 400**：裁剪上下文时按字符预算切掉最老的头部，切点可能正落在「assistant 的 `tool_calls`」和它对应的「`tool` 结果」中间——assistant 被切走、`tool` 留下，成了配不上对的孤儿。阿里云百炼（以及部分 OpenAI 兼容网关）对这类历史是硬校验，直接返回 `400 invalid_parameter_error: The tool_call_id in the response message does not match the tool_call_id in the tool_call`。更要命的是这个错误会**持续**：孤儿一直躺在历史里，之后每一轮请求都会带上它，这个会话就彻底不回话了。
+  现在三处都补上：压缩切完立刻清孤儿（断根）、发送前按 assistant 声明过的 id 再过滤一遍（历史里已有脏数据也不会炸）、裁剪后开头连续的孤儿 `tool` 一并丢掉。
+
 ## 1.0.7 — 2026-10-24
 
 ### 新增

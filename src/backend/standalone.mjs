@@ -305,15 +305,27 @@ export function createStandaloneBackend(cfg, { log = () => {} } = {}) {
     const messages = [];
     if (systemParts.length) messages.push({ role: 'system', content: systemParts.join('\n\n') });
     let total = messages.reduce((n, m) => n + String(m.content ?? '').length, 0);
+    // 历史里可能残留孤儿 tool 消息（assistant 那条丢了、或者被裁剪切在中间）。
+    // 阿里云百炼对这类历史是硬报错：
+    //   The tool_call_id in the response message does not match the tool_call_id in the tool_call
+    // 所以先按「assistant 声明过的 id」筛一遍，只保留成对的 tool 消息。
+    const declaredCalls = new Set();
+    for (const m of s.messages) {
+      if (Array.isArray(m.tool_calls)) for (const tc of m.tool_calls) declaredCalls.add(tc.id);
+    }
+    const usable = s.messages.filter((m) => m.role !== 'tool' || declaredCalls.has(m.tool_call_id));
     // 从最近往前挑，超过预算就停；保证最近 KEEP_RECENT_MESSAGES 条一定在。
     const picked = [];
-    for (let i = s.messages.length - 1; i >= 0; i -= 1) {
-      const m = s.messages[i];
+    for (let i = usable.length - 1; i >= 0; i -= 1) {
+      const m = usable[i];
       const len = String(m.content ?? '').length + JSON.stringify(m.tool_calls ?? '').length;
       if (picked.length >= KEEP_RECENT_MESSAGES && total + len > DEFAULT_HISTORY_CHARS) break;
       total += len;
       picked.unshift(m);
     }
+    // 裁剪点可能正落在一对 assistant(tool_calls) → tool 中间，留下没有 assistant 的孤儿
+    // tool 消息。开头连续、找不到对应 assistant 的一律丢掉。
+    while (picked.length && picked[0].role === 'tool') picked.shift();
     return { messages: messages.concat(picked), dropped: s.messages.length - picked.length };
   }
 
@@ -332,6 +344,13 @@ export function createStandaloneBackend(cfg, { log = () => {} } = {}) {
     // 摘要本身也有上限，超了就从最老的截掉。
     s.summary = merged.length > 4000 ? merged.slice(merged.length - 4000) : merged;
     s.messages.splice(0, droppedCount);
+    // 切点可能正好落在 assistant(tool_calls) → tool 中间：assistant 被切走、tool 留下，
+    // 变成永远配不上对的孤儿，下次请求就被接口 400 掉。这里把孤儿一并清掉。
+    const stillDeclared = new Set();
+    for (const m of s.messages) {
+      if (Array.isArray(m.tool_calls)) for (const tc of m.tool_calls) stillDeclared.add(tc.id);
+    }
+    s.messages = s.messages.filter((m) => m.role !== 'tool' || stillDeclared.has(m.tool_call_id));
   }
 
   // ── 一个回合：模型 ↔ 工具 循环 ─────────────────────────────────────────────
