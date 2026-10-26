@@ -1064,7 +1064,9 @@ async function loadStart() {
       gwDesc = '包里没带网关（SnowLuma 的许可不允许随包分发），点这个按钮我帮你下完整版装上，大约 40 MB，装完不用自己解压。';
       gwActions = '<button class="btn mini primary" id="s-gw-install">帮我下载并装好</button><button class="btn mini" id="s-gw-manual">自己去下载页</button>';
     } else if (!gwOk) {
-      gwDesc = '网关装好了。点「启动网关」把它拉起来，再点「登录页」，用手机 QQ 扫码。这一步做完这行会自动变绿，不用手动刷新。';
+      gwDesc = (s.gatewayHint)
+        ? s.gatewayHint
+        : '网关装好了。点「启动网关」把它拉起来，再点「登录页」，用手机 QQ 扫码。这一步做完这行会自动变绿，不用手动刷新。';
       gwActions = '<button class="btn mini primary" id="s-gw-start">启动网关</button><button class="btn mini" id="s-gw-login">登录页</button><button class="btn mini" id="s-gw-refresh">刷新状态</button>';
     } else {
       gwDesc = '网关在线，QQ 已登录。最后一步：把机器人启动起来，它才会开始回消息。';
@@ -3404,6 +3406,17 @@ async function loadQQ() {
       st.style.color = gw.running ? 'var(--ok)' : (gw.installed ? 'var(--muted)' : 'var(--warn)');
       $('gw-webui').textContent = gw.webui ? '127.0.0.1:' + gw.webuiPort + ' 在线' : (gw.installed ? '离线' : '—');
       $('gw-onebot').textContent = (gw.onebotHttp && gw.onebotWs) ? '38000 / 38001 在线' : (gw.running ? '离线' : '—');
+    }
+    // 网关进程起来了但 OneBot 没开：多半是 QQ 没被重新注入，把话说明白
+    const gt = $('gw-toast');
+    if (gt) {
+      if (s.gatewayHint) {
+        gt.textContent = s.gatewayHint;
+        gt.style.color = 'var(--warn)';
+      } else if (gt.style.color) {
+        gt.textContent = '';
+        gt.style.color = '';
+      }
     }
     const hint = $('qq-path-hint');
     if (!hint) return;

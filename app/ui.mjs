@@ -71,6 +71,8 @@ const DEFAULTS = {
 };
 
 const children = {};
+// 最近一次「网关起来了但 OneBot 没开」的提示，status() 会带出去给前端显示
+let gatewayHint = '';
 const logs = { bot: [], snowluma: [] };
 
 function log(line) {
@@ -139,6 +141,16 @@ function probePort(port, timeoutMs = 700) {
     sock.once('timeout', () => finish(false));
     sock.once('error', () => finish(false));
   });
+}
+
+// 轮询等端口起来（网关进程起了不等于服务已经可用）
+async function waitPort(port, totalMs = 20000, stepMs = 1000) {
+  const deadline = Date.now() + totalMs;
+  do {
+    if (await probePort(port, 500)) return true;
+    await new Promise((r) => setTimeout(r, stepMs));
+  } while (Date.now() < deadline);
+  return false;
 }
 
 // ── QQ 本体 ─────────────────────────────────────────────
@@ -1103,6 +1115,8 @@ async function status() {
     // 新键：界面一律读它。snowluma 保留成同一份内容，避免旧页面/旧调用方拿到 undefined。
     gateway: gatewayState,
     snowluma: gatewayState,
+    // 只有「网关起来了但 OneBot 没开」时才有值，前端拿到就直接显示
+    gatewayHint,
     bot: { running: !!botAlive, pid: children.bot?.pid ?? null },
     // QQ 本体：网关靠注入它工作，所以面板要能把「装在哪、开没开」摆出来。
     qq: {
@@ -1276,6 +1290,20 @@ async function startSnowLuma() {
   children.snowluma = child;
   rememberPid('snowluma', child.pid);
   log(`SnowLuma 已启动（pid ${child.pid}）`);
+  // 网关进程起来了不等于 QQ 那头接上了：SnowLuma 只能给「还没跑起来」的 QQ 注入 hook。
+  // QQ 早就在跑（或者上一次注入没生效）时，OneBot 的 38001 不会开，
+  // 面板却显示「网关运行中」，机器人于是一直连不上。
+  // 这里在后台盯着，不挡住「启动网关」的返回。
+  gatewayHint = '';
+  void (async () => {
+    const tail = children.snowluma;
+    const ok = await waitPort(ONEBOT_WS_PORT, 20000);
+    if (children.snowluma !== tail) return; // 期间又被停掉或重启了，别覆盖新状态
+    if (!ok) {
+      gatewayHint = '网关进程起来了，但 QQ 那头没接上（38001 没开）。把 QQ 完全退出（托盘图标也要退）再打开一次，然后点「刷新」。';
+      log('网关进程起了，但 OneBot（38001）没开——多半是 QQ 没被重新注入');
+    }
+  })();
   return { ok: true, pid: child.pid };
 }
 
@@ -1290,13 +1318,14 @@ function taskkill(pid) {
 function findOwnPids(marker) {
   return new Promise((resolve) => {
     // 必须写成一行：-Command 后面换行会被拼成同一条语句，缺分号就直接语法错。
-    const script = `$root = $env:QQBOT_ROOT; `
-      + `Get-CimInstance Win32_Process -Filter "Name='node.exe'" `
-      + `| Where-Object { $_.CommandLine -like ('*' + $root + '*') -and $_.CommandLine -like ('*' + $env:QQBOT_MARKER + '*') } `
+    // ROOT 里可能带中文，经 env 传给 PowerShell 会被破坏成乱码，
+    // 所以只比对路径里那段纯 ASCII 的目录名（qq-bot）+ 进程标记。
+    const script = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" `
+      + `| Where-Object { $_.CommandLine -like ('*' + $env:QQBOT_TAG + '*' + $env:QQBOT_MARKER + '*') } `
       + `| ForEach-Object { $_.ProcessId }`;
     execFile('powershell', ['-NoProfile', '-Command', script], {
       windowsHide: true,
-      env: { ...process.env, QQBOT_ROOT: ROOT, QQBOT_MARKER: marker }
+      env: { ...process.env, QQBOT_TAG: path.basename(ROOT), QQBOT_MARKER: marker }
     }, (error, stdout) => {
       if (error) return resolve([]);
       resolve(String(stdout ?? '').split(/\r?\n/).map((line) => Number(line.trim())).filter((n) => Number.isFinite(n) && n > 0 && n !== process.pid));
