@@ -79,6 +79,11 @@ h1 { margin: 4px 0 4px; font-size: 21px; font-weight: 650; letter-spacing: -.2px
 .ver-n { font-weight: 600; font-size: 14px; font-variant-numeric: tabular-nums; }
 .ver-b { display: flex; align-items: center; }
 .ver-a { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.stk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 14px; padding: 16px; }
+.stk-item { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+.stk-item img { width: 100%; height: 132px; object-fit: contain; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; }
+.stk-note { font-size: 12px; color: var(--muted); text-align: center; line-height: 1.5; word-break: break-word; }
+.stk-badge { font-size: 11px; color: var(--muted); opacity: .8; }
 @media (max-width: 720px) {
   .ver-row { grid-template-columns: 108px 1fr; }
   .ver-a { justify-content: flex-start; }
@@ -120,6 +125,7 @@ h1 { margin: 4px 0 4px; font-size: 21px; font-weight: 650; letter-spacing: -.2px
 .conn-port { font: 11.5px "Cascadia Mono", Consolas, monospace; color: var(--muted); }
 .conn-state { font-family: inherit; font-size: 11.5px; font-weight: 650; }
 .conn-state.ok { color: var(--ok); }
+.gw-val { font-size: 13.5px; padding: 8px 0; }
 .conn-state.warn { color: var(--warn); }
 .conn-state.ond { color: var(--muted); }
 
@@ -504,6 +510,7 @@ const NAV = [
     { id: 'usage',    label: '令牌用量', svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9M9.5 10h4a1.8 1.8 0 010 3.6h-3"/></svg>' , self: true },
     { id: 'access',   label: '访问与安全', svg: '<svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>' },
     { id: 'operations', label: '调试与运维', svg: '<svg viewBox="0 0 24 24"><path d="M15 4a4.5 4.5 0 00-4 6.7L4 17.6 6.4 20l6.9-7a4.5 4.5 0 005.7-6.2l-2.6 2.6-2.4-2.4z"/></svg>' },
+    { id: 'stickers',  label: '表情包', self: true, svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M9 15c1.2 1 3.6 1 4.8 0"/></svg>' },
     { id: 'update',     label: '版本与更新', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M12 4v10"/><path d="M8 11l4 4 4-4"/><path d="M5 19h14"/></svg>' },
     { id: 'reference',  label: '工具参考', svg: '<svg viewBox="0 0 24 24"><path d="M5 4h9a3 3 0 013 3v13H8a3 3 0 01-3-3z"/><path d="M17 7h2v13h-2M8 8h6M8 12h6"/></svg>' }
   ]}
@@ -877,6 +884,22 @@ qqView.innerHTML = head('QQ LAUNCH', 'QQ 启动', '网关是往正在运行的 Q
 
 
   <div class="card span2">
+    <div class="card-head">
+      <h2 class="card-title">QQ 网关</h2>
+      <div class="field-actions">
+        <button id="gw-start" class="btn mini primary">启动网关</button>
+        <button id="gw-login" class="btn mini">登录页</button>
+      </div>
+    </div>
+    <div class="formgrid" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+      <div class="field"><label>状态</label><div id="gw-state" class="gw-val">—</div></div>
+      <div class="field"><label>WebUI（扫码登录）</label><div id="gw-webui" class="gw-val">—</div></div>
+      <div class="field"><label>OneBot</label><div id="gw-onebot" class="gw-val">—</div></div>
+    </div>
+    <div class="hint" id="gw-toast" style="padding:0 18px 14px"></div>
+  </div>
+
+  <div class="card span2">
     <div class="card-head"><h2 class="card-title">QQ 装在哪</h2></div>
     <div class="formgrid">
       <div class="field" style="grid-column:1 / -1">
@@ -941,6 +964,34 @@ updateView.innerHTML = head(
   </div>
 </div>`;
 $('main').appendChild(updateView);
+
+// ── 自建页：表情包 ──────────────────────────────────────
+// 收藏的表情是 AI 发表情、催睡配图、群里斗图的原料，但以前只能在一个下拉框里
+// 看到名字，看不见图。这页把图摆出来，顺带给一个「从 QQ 重新同步」的入口。
+const stickersView = document.createElement('section');
+stickersView.className = 'view';
+stickersView.dataset.view = 'stickers';
+stickersView.style.maxWidth = '1040px';
+stickersView.style.margin = '0 auto';
+stickersView.innerHTML = head(
+  'STICKERS',
+  '表情包',
+  '这个 QQ 号收藏的表情。AI 能按名字挑着发，也能看懂没有备注的图。'
+) + `
+<div class="grid">
+  <div class="card span2">
+    <div class="card-head">
+      <h2 class="card-title">收藏的表情<span class="hint" id="stk-count"></span></h2>
+      <button class="ghost" id="stk-sync">从 QQ 重新同步</button>
+    </div>
+    <div id="stk-body"><div class="hint" style="padding:16px">读取中…</div></div>
+    <div class="hint" style="padding:14px 16px 16px; border-top:1px solid var(--border); line-height:1.75">
+      列表来自这个 QQ 号收藏的表情，想加新的就在 QQ 里收藏，再点「从 QQ 重新同步」。
+      没有备注的图 AI 会自己看一遍再记住含义。
+    </div>
+  </div>
+</div>`;
+$('main').appendChild(stickersView);
 
 
 // ── 自建页：快速开始 ────────────────────────────────────
@@ -1877,6 +1928,7 @@ function go(id) {
     if (id === 'qzone') void loadQzone();
     if (id === 'qq') { void loadQQ(); }
     if (id === 'update') { void loadVersion(false); }
+    if (id === 'stickers') void loadStickers(false);
   if (id === 'start') void loadStart();
     if (id === 'personalize') void loadPersonalize();
     if (id === 'allow') void loadScope();
@@ -3345,12 +3397,49 @@ async function loadQQ() {
   try {
     const s = await api('status');
     applyQQ(s.qq);
+    const gw = s.gateway;
+    if (gw && $('gw-state')) {
+      const st = $('gw-state');
+      st.textContent = gw.running ? (gw.pid ? '运行中（PID ' + gw.pid + '）' : '运行中') : (gw.installed ? '未运行' : '没有安装网关');
+      st.style.color = gw.running ? 'var(--ok)' : (gw.installed ? 'var(--muted)' : 'var(--warn)');
+      $('gw-webui').textContent = gw.webui ? '127.0.0.1:' + gw.webuiPort + ' 在线' : (gw.installed ? '离线' : '—');
+      $('gw-onebot').textContent = (gw.onebotHttp && gw.onebotWs) ? '38000 / 38001 在线' : (gw.running ? '离线' : '—');
+    }
     const hint = $('qq-path-hint');
     if (!hint) return;
     if (s.qq && s.qq.configured) hint.textContent = '已保存：' + s.qq.path;
     else if (s.qq && s.qq.runningPath) hint.textContent = '检测到正在运行的 QQ：' + s.qq.runningPath + '（点「自动探测」填进去再保存）';
     else hint.textContent = '还没保存路径；自动探测会先看正在跑的 QQ，再查注册表。';
   } catch (e) { /* 忽略 */ }
+}
+if ($('gw-start')) {
+  $('gw-start').onclick = async function () {
+    const btn = $('gw-start');
+    btn.disabled = true;
+    btn.textContent = '启动中…';
+    try {
+      const r = await api('gateway/start', { method: 'POST' });
+      if (r.already) toast('gw-toast', '网关已经在跑了');
+      else if (r.ok) toast('gw-toast', '网关已启动');
+      else toast('gw-toast', r.error || '启动失败', true);
+      await loadQQ();
+    } catch (e) {
+      toast('gw-toast', '启动失败：' + e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '启动网关';
+    }
+  };
+}
+if ($('gw-login')) {
+  $('gw-login').onclick = async function () {
+    try {
+      const r = await api('open-webui', { method: 'POST' });
+      if (r && r.url) window.open(r.url);
+    } catch (e) {
+      toast('gw-toast', '打不开登录页：' + e.message, true);
+    }
+  };
 }
 if ($('qq-start')) {
   $('qq-start').onclick = async function () {
@@ -3470,6 +3559,37 @@ async function loadVersion(force) {
   }
 }
 if ($('ver-refresh')) $('ver-refresh').onclick = function () { void loadVersion(true); };
+
+// ── 表情包 ──────────────────────────────────────────────
+// GET /api/stickers 只读本地库；POST /api/stickers/sync 才会去 QQ 那边重拉一份。
+// 写副作用不挂在读接口上，所以「刷新」和「同步」是两个按钮语义。
+async function loadStickers(force) {
+  const body = $('stk-body');
+  if (!body) return;
+  body.innerHTML = '<div class="hint" style="padding:16px">' + (force ? '正在从 QQ 同步…' : '读取中…') + '</div>';
+  let r;
+  try {
+    r = force
+      ? await consoleFetch('/api/stickers/sync', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+      : await consoleFetch('/api/stickers?count=200');
+  } catch (e) {
+    body.innerHTML = '<div class="hint" style="padding:16px">读取失败：' + escVer(e.message) + '</div>';
+    return;
+  }
+  const list = Array.isArray(r.stickers) ? r.stickers : (Array.isArray(r.entries) ? r.entries : []);
+  if ($('stk-count')) $('stk-count').textContent = list.length ? '（' + list.length + ' 个）' : '';
+  if (!list.length) {
+    body.innerHTML = '<div class="hint" style="padding:16px">还没有收藏表情。在 QQ 里收藏几个，再点「从 QQ 重新同步」。</div>';
+    return;
+  }
+  body.innerHTML = '<div class="stk-grid">' + list.map(function (s) {
+    const name = escVer(s.desc || s.localNote || String(s.md5 || '').slice(0, 8));
+    const used = s.useCount ? '<div class="stk-badge">用过 ' + s.useCount + ' 次</div>' : '';
+    return '<div class="stk-item"><img loading="lazy" src="' + escVer(s.url) + '" alt="' + name + '">'
+      + '<div class="stk-note">' + name + '</div>' + used + '</div>';
+  }).join('') + '</div>';
+}
+if ($('stk-sync')) $('stk-sync').onclick = function () { void loadStickers(true); };
 if ($('ver-body')) $('ver-body').addEventListener('click', async function (ev) {
   const btn = ev.target.closest('[data-ver-act]');
   if (!btn || btn.disabled) return;

@@ -20,6 +20,25 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const MAX_STEPS = 12;            // 单回合最多“模型→工具”往返次数
 const DEFAULT_HISTORY_CHARS = 120000; // 触发裁剪的历史字符预算（约 60K token）
 const KEEP_RECENT_MESSAGES = 24;      // 裁剪时最少保留的最近消息条数
+const MAX_TOOL_IMAGES = 2;            // 一次工具返回最多补几张图给模型（每张几十 KB，会明显涨 token）
+
+/** 消息内容可能是字符串，也可能是多模态数组（image_url）。取「文本长度」用于预算。 */
+function contentLength(m) {
+  const c = m?.content;
+  if (typeof c === 'string') return c.length;
+  if (Array.isArray(c)) {
+    return c.reduce((n, b) => n + (typeof b?.text === 'string' ? b.text.length : 64), 0);
+  }
+  return 0;
+}
+
+/** 同上的文本版：把多模态数组压成可读文本（图片位置留占位），用于摘要与日志。 */
+function contentText(m) {
+  const c = m?.content;
+  if (typeof c === 'string') return c;
+  if (!Array.isArray(c)) return c == null ? '' : String(c);
+  return c.map((b) => (typeof b?.text === 'string' ? b.text : (b?.type === 'image_url' ? '[图片]' : ''))).join(' ').trim();
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -304,7 +323,7 @@ export function createStandaloneBackend(cfg, { log = () => {} } = {}) {
     if (s.summary) systemParts.push(`【更早的对话摘要】\n${s.summary}`);
     const messages = [];
     if (systemParts.length) messages.push({ role: 'system', content: systemParts.join('\n\n') });
-    let total = messages.reduce((n, m) => n + String(m.content ?? '').length, 0);
+    let total = messages.reduce((n, m) => n + contentLength(m), 0);
     // 历史里可能残留孤儿 tool 消息（assistant 那条丢了、或者被裁剪切在中间）。
     // 阿里云百炼对这类历史是硬报错：
     //   The tool_call_id in the response message does not match the tool_call_id in the tool_call
@@ -318,7 +337,7 @@ export function createStandaloneBackend(cfg, { log = () => {} } = {}) {
     const picked = [];
     for (let i = usable.length - 1; i >= 0; i -= 1) {
       const m = usable[i];
-      const len = String(m.content ?? '').length + JSON.stringify(m.tool_calls ?? '').length;
+      const len = contentLength(m) + JSON.stringify(m.tool_calls ?? '').length;
       if (picked.length >= KEEP_RECENT_MESSAGES && total + len > DEFAULT_HISTORY_CHARS) break;
       total += len;
       picked.unshift(m);
@@ -335,7 +354,7 @@ export function createStandaloneBackend(cfg, { log = () => {} } = {}) {
     const head = s.messages.slice(0, droppedCount);
     const lines = [];
     for (const m of head) {
-      const text = String(m.content ?? '').replace(/\s+/g, ' ').trim();
+      const text = contentText(m).replace(/\s+/g, ' ').trim();
       if (!text) continue;
       const who = m.role === 'user' ? '对方' : m.role === 'assistant' ? '自己' : m.role;
       lines.push(`${who}：${text.slice(0, 160)}`);
@@ -411,6 +430,9 @@ export function createStandaloneBackend(cfg, { log = () => {} } = {}) {
         }));
         s.messages.push(assistantMsg);
 
+        // 工具返回的图片不能塞进 tool 消息（OpenAI 兼容接口那边只收字符串），
+        // 必须等这一批 tool 消息都排完，再补一条 user 消息把图带上，模型才真的看得到。
+        const pendingImages = [];
         for (let i = 0; i < reply.toolCalls.length; i += 1) {
           const tc = reply.toolCalls[i];
           const callId = callIds[i];
@@ -418,18 +440,34 @@ export function createStandaloneBackend(cfg, { log = () => {} } = {}) {
           const args = parseToolArgs(tc.function?.arguments);
           emit(s.id, { type: 'tool/call', data: { name, callId, arguments: args } });
           const result = await tools.call(name, args);
+          const images = Array.isArray(result.images) ? result.images : [];
           emit(s.id, {
             type: 'tool/result',
             data: {
               message: {
                 role: 'tool',
                 source: { callId, name },
-                content: [{ type: 'text', text: result.text, isError: result.isError }],
+                content: [
+                  { type: 'text', text: result.text, isError: result.isError },
+                  ...images.map((im) => ({ type: 'image', mimeType: im.mimeType, data: im.data }))
+                ],
                 isError: result.isError
               }
             }
           });
           s.messages.push({ role: 'tool', tool_call_id: callId, content: result.text });
+          for (const im of images) pendingImages.push({ name, ...im });
+        }
+        if (pendingImages.length) {
+          // 一次最多补两张：再多既撑上下文也烧 token，够模型认图了。
+          const picked = pendingImages.slice(0, MAX_TOOL_IMAGES);
+          s.messages.push({
+            role: 'user',
+            content: [
+              { type: 'text', text: `（上面工具返回的图片，共 ${pendingImages.length} 张${pendingImages.length > picked.length ? `，只附前 ${picked.length} 张` : ''}）` },
+              ...picked.map((im) => ({ type: 'image_url', image_url: { url: `data:${im.mimeType};base64,${im.data}` } }))
+            ]
+          });
         }
       }
     } catch (error) {
@@ -501,14 +539,26 @@ export function createStandaloneBackend(cfg, { log = () => {} } = {}) {
         // 进程重启后内存里没有这个会话，但磁盘上有：先恢复再跑，别让重启等于失忆。
         const s = sessions.get(sessionId) ?? loadSession(sessionId);
         if (!s) return rpcFail('not-found', `session ${sessionId} 不存在`);
-        const textBlocks = (content ?? [])
+        const blocks = Array.isArray(content) ? content : [];
+        const textBlocks = blocks
           .filter((b) => b?.type === 'text' && typeof b.text === 'string')
           .map((b) => b.text);
+        // bridge 内联进来的图片是 { mimeType, data } 形状（没有 type 字段），
+        // 以前这里只挑 text 块，图就被丢在了门口。转成 image_url 一起带过去。
+        const imageBlocks = blocks
+          .filter((b) => b && typeof b.mimeType === 'string' && typeof b.data === 'string' && b.data)
+          .slice(0, MAX_TOOL_IMAGES);
         const userText = textBlocks.join('\n').trim();
-        if (!userText) return rpcFail('invalid', 'prompt 内容为空');
+        if (!userText && !imageBlocks.length) return rpcFail('invalid', 'prompt 内容为空');
         s.abort = new AbortController();
+        const userContent = imageBlocks.length
+          ? [
+              { type: 'text', text: userText || '（对方发来一张图片）' },
+              ...imageBlocks.map((b) => ({ type: 'image_url', image_url: { url: `data:${b.mimeType};base64,${b.data}` } }))
+            ]
+          : userText;
         // 串行：同一个会话上的多个 prompt 排队，不并发打模型。
-        s.chain = s.chain.then(() => runTurn(s, userText)).catch(() => {});
+        s.chain = s.chain.then(() => runTurn(s, userContent)).catch(() => {});
         return rpcOk({ accepted: true });
       },
 

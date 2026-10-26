@@ -52,6 +52,23 @@ function resultText(result) {
   return text || '(工具没有返回内容)';
 }
 
+/**
+ * 把 MCP 返回的图片块单独抽出来。
+ *
+ * resultText 只能给模型看文本；OpenAI 兼容接口的 tool 消息内容必须是字符串，
+ * 图片得作为**紧随其后的 user 消息**里的 image_url 传下去，模型才真的看得到。
+ * 这里只负责搬运，具体怎么塞由调用方决定。
+ */
+function resultImages(result) {
+  const out = [];
+  for (const block of result?.content ?? []) {
+    if (block?.type === 'image' && typeof block.data === 'string' && block.data && typeof block.mimeType === 'string') {
+      out.push({ mimeType: block.mimeType, data: block.data });
+    }
+  }
+  return out;
+}
+
 export function createToolRegistry({ log = () => {} } = {}) {
   /** 每个 server 一个连接槽：{ client, connecting, label } */
   const slots = new Map(SERVERS.map((s) => [s.name, { spec: s, client: null, connecting: null, label: s.label }]));
@@ -113,7 +130,7 @@ export function createToolRegistry({ log = () => {} } = {}) {
     return cachedTools;
   }
 
-  /** @returns {Promise<{text: string, isError: boolean}>} */
+  /** @returns {Promise<{text: string, isError: boolean, images: Array<{mimeType: string, data: string}>}>} */
   async function call(name, args) {
     const serverName = owner.get(name);
     if (!serverName) {
@@ -121,24 +138,24 @@ export function createToolRegistry({ log = () => {} } = {}) {
       try { await list(); } catch {}
     }
     const target = owner.get(name);
-    if (!target) return { text: `没有名为 ${name} 的工具`, isError: true };
+    if (!target) return { text: `没有名为 ${name} 的工具`, isError: true, images: [] };
     let c;
     try {
       c = await connectOne(target);
     } catch (error) {
-      return { text: `工具进程启动失败：${error?.message ?? error}`, isError: true };
+      return { text: `工具进程启动失败：${error?.message ?? error}`, isError: true, images: [] };
     }
     try {
       const result = await c.callTool({ name, arguments: args ?? {} });
       const isError = result?.isError === true;
-      return { text: resultText(result), isError };
+      return { text: resultText(result), isError, images: resultImages(result) };
     } catch (error) {
       // 子进程崩溃：丢掉这个 server 的句柄，下一次调用重连一次。
       const slot = slots.get(target);
       try { await c.close(); } catch {}
       if (slot) slot.client = null;
       cachedTools = null;
-      return { text: `工具调用失败（${name}）：${error?.message ?? error}`, isError: true };
+      return { text: `工具调用失败（${name}）：${error?.message ?? error}`, isError: true, images: [] };
     }
   }
 

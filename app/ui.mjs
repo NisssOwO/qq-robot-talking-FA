@@ -97,8 +97,29 @@ function readConfig() {
 }
 
 function writeConfig(cfg) {
+  const before = String(readConfig()?.snowluma?.accessToken || '').trim();
   fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
   fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(cfg, null, 2)}\n`, 'utf8');
+  // OneBot token 是网关进程**启动时读一次**就存进内存的。改配置却不重启网关的话，
+  // 桥接下一次断线重连会一直撞 "rejected unauthorized"，表现成「机器人在线但发不出文字」。
+  // 所以 token 一变就顺手对齐并重启网关，让两边立刻一致。
+  const after = String(cfg?.snowluma?.accessToken || '').trim();
+  if (after && after !== before) {
+    const fixed = normalizeGatewayPorts();
+    if (fixed.tokenFixed.length && children.snowluma) {
+      log('网关 token 变了，正在重启网关让它读到新值…');
+      void (async () => {
+        try {
+          await stopGateway();
+          await new Promise((resolve) => setTimeout(resolve, 900));
+          await startGateway();
+          log('网关已用新 token 重启');
+        } catch (error) {
+          log(`网关重启失败（新 token 要等下次手动启动才生效）：${error?.message ?? error}`);
+        }
+      })();
+    }
+  }
 }
 
 function probePort(port, timeoutMs = 700) {
