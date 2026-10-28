@@ -1070,6 +1070,182 @@ function gatewayKind() {
   return 'snowluma';
 }
 
+
+// ── 独立后端的会话历史（人工编辑用）──────────────────────────────────────
+// 会话文件由 src/backend/standalone.mjs 管理，这边只做「安全地读 / 删 / 截断」。
+// 落盘之后机器人内存里还是旧的那份，所以编辑接口会顺带重启机器人让它重新 loadSession。
+function standaloneSessionsDir() {
+  return path.join(STATE_DIR, 'standalone', 'sessions');
+}
+
+// lastError 存的是 safeFailure 的对象，展示前压成一行字。
+function errText(v) {
+  if (!v) return '';
+  if (typeof v === 'string') return v;
+  return String(v.message || v.apiCode || JSON.stringify(v));
+}
+
+// 只允许打开这几个数据文件，别的一律拒绝（这个接口能拉起外部程序）。
+const REVEALABLE = {
+  social: () => path.join(STATE_DIR, 'social-v2.json'),
+  config: () => path.join(ROOT, 'config.json'),
+  slang: () => path.join(STATE_DIR, 'slang.json'),
+  stickers: () => path.join(STATE_DIR, 'stickers.json'),
+  sessions: () => path.join(STATE_DIR, 'standalone', 'sessions'),
+  statedir: () => STATE_DIR
+};
+
+function revealDataFile(key) {
+  const pick = REVEALABLE[String(key || '')];
+  if (!pick) throw new Error('不支持的 file：' + key);
+  const target = pick();
+  if (!fs.existsSync(target)) throw new Error('文件不存在：' + target);
+  // explorer /select, 只高亮不打开，避免拿 .json 的默认关联乱跑
+  spawn('explorer.exe', ['/select,' + target], { detached: true, stdio: 'ignore' }).unref();
+  return { ok: true, path: target };
+}
+
+function safeSessionId(raw) {
+  const id = String(raw ?? '').trim();
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(id)) throw new Error('会话 id 不合法');
+  return id;
+}
+
+function listStandaloneSessions() {
+  const dir = standaloneSessionsDir();
+  const sessions = [];
+  let files = [];
+  try { files = fs.readdirSync(dir); } catch { files = []; }
+  for (const f of files) {
+    if (!f.endsWith('.json') || f.includes('.bak-')) continue;
+    const id = f.replace(/\.json$/, '');
+    let messages = 0, chars = 0, summaryChars = 0, updatedAt = '', preset = '', blocked = false, blockedAt = '', blockedError = '';
+    try {
+      const d = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+      const msgs = Array.isArray(d.messages) ? d.messages : [];
+      messages = msgs.length;
+      chars = msgs.reduce((n, m) => n + String(m?.content ?? '').length, 0);
+      summaryChars = String(d.summary ?? '').length;
+      updatedAt = String(d.updatedAt ?? '');
+      preset = String(d.preset ?? '');
+      if (d.auditBlocked) {
+        blocked = true;
+        blockedAt = String(d.auditBlocked.at ?? '');
+        blockedError = errText(d.auditBlocked.lastError);
+      }
+    } catch { /* 文件坏了也照列，好让人一眼看见 */ }
+    sessions.push({ id, file: f, messages, chars, summaryChars, updatedAt, preset, blocked, blockedAt, blockedError });
+  }
+  sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return { dir: path.relative(ROOT, dir), sessions };
+}
+
+function readStandaloneSession(rawId, full = false) {
+  const id = safeSessionId(rawId);
+  const file = path.join(standaloneSessionsDir(), id + '.json');
+  if (!fs.existsSync(file)) throw new Error('没有这个会话：' + id);
+  const d = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const msgs = Array.isArray(d.messages) ? d.messages : [];
+  return {
+    id,
+    preset: String(d.preset ?? ''),
+    summary: String(d.summary ?? ''),
+    updatedAt: String(d.updatedAt ?? ''),
+    blocked: !!d.auditBlocked,
+    blockedAt: String(d.auditBlocked?.at ?? ''),
+    blockedError: errText(d.auditBlocked?.lastError),
+    messages: msgs.map((m, i) => {
+      const text = String(m?.content ?? '');
+      return {
+        index: i,
+        role: String(m?.role ?? ''),
+        chars: text.length,
+        calls: Array.isArray(m?.tool_calls) ? m.tool_calls.map((t) => String(t?.id ?? '')) : [],
+        toolCallId: String(m?.tool_call_id ?? ''),
+        preview: text.slice(0, 160),
+        ...(full ? { content: text } : {})
+      };
+    })
+  };
+}
+
+async function editStandaloneSession(input) {
+  const id = safeSessionId(input?.id);
+  const dir = standaloneSessionsDir();
+  const file = path.join(dir, id + '.json');
+  if (!fs.existsSync(file)) throw new Error('没有这个会话：' + id);
+  const d = JSON.parse(fs.readFileSync(file, 'utf8'));
+  let msgs = Array.isArray(d.messages) ? d.messages : [];
+  const before = msgs.length;
+  const mode = String(input?.mode ?? '');
+
+  // 先备份：人改坏了还能捞回来。
+  const bak = file + '.bak-' + Date.now();
+  fs.copyFileSync(file, bak);
+
+  if (mode === 'delete') {
+    const drop = new Set((Array.isArray(input.indices) ? input.indices : [])
+      .map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < msgs.length));
+    // 删 tool 消息时，如果它对应的 assistant 的所有 tool 都被删了，就连 assistant 一起删。
+    // 留下孤儿 tool_call_id 会让下一次请求直接 400（这个坑踩过一次）。
+    const owners = new Map();
+    msgs.forEach((m, i) => {
+      if (Array.isArray(m?.tool_calls)) for (const tc of m.tool_calls) if (tc?.id) owners.set(String(tc.id), i);
+    });
+    for (const i of [...drop]) {
+      const m = msgs[i];
+      const owner = m?.role === 'tool' && m.tool_call_id ? owners.get(String(m.tool_call_id)) : undefined;
+      if (owner === undefined) continue;
+      const siblings = (msgs[owner]?.tool_calls ?? []).map((tc) => String(tc?.id ?? ''));
+      const allGone = siblings.every((sid) => {
+        const at = msgs.findIndex((x) => x?.role === 'tool' && String(x?.tool_call_id) === sid);
+        return at === -1 || drop.has(at);
+      });
+      if (allGone) drop.add(owner);
+    }
+    msgs = msgs.filter((_, i) => !drop.has(i));
+  } else if (mode === 'keepLast') {
+    const n = Math.max(1, Math.min(500, Number(input.count) || 0));
+    msgs = msgs.slice(-n);
+    // 切点落在 tool 上就是孤儿，往后挪到第一条非 tool。
+    while (msgs.length && msgs[0]?.role === 'tool') msgs.shift();
+  } else if (mode === 'unblock') {
+    if (!d.auditBlocked) throw new Error('这个会话没有被暂停');
+    d.auditBlocked = null;
+  } else if (mode === 'clearSummary') {
+    d.summary = '';
+  } else if (mode === 'setSummary') {
+    d.summary = String(input.text ?? '').slice(0, 8000);
+  } else {
+    throw new Error('不认识的操作：' + mode);
+  }
+
+  if (mode === 'delete' || mode === 'keepLast') d.messages = msgs;
+  d.updatedAt = new Date().toISOString();
+  fs.writeFileSync(file, JSON.stringify(d, null, 2), 'utf8');
+
+  let restarted = false;
+  try {
+    if (children.bridge && !children.bridge.killed) {
+      await stopBot();
+      await new Promise((r) => setTimeout(r, 1200));
+      await startBot();
+      restarted = true;
+    }
+  } catch (e) {
+    log('改完会话后重启机器人失败：' + (e?.message ?? e));
+  }
+
+  return {
+    id,
+    before,
+    after: Array.isArray(d.messages) ? d.messages.length : before,
+    summaryChars: String(d.summary ?? '').length,
+    backup: path.basename(bak),
+    restarted
+  };
+}
+
 async function startGateway() {
   return gatewayKind() === 'snowluma' ? startSnowLuma() : startNapCat();
 }
@@ -1364,9 +1540,11 @@ async function startBot() {
 
   fs.mkdirSync(STATE_DIR, { recursive: true });
   const out = fs.openSync(BRIDGE_LOG, 'a');
+  // stdout 必须丢掉：bridge.js 的 log() 自己会写 BRIDGE_LOG，再把 stdout 接到同一个文件
+  // 就会每行写两遍，排查时看着像每条都触发了两次。stderr 仍接文件，崩溃堆栈只能从这儿拿。
   const child = spawn(process.execPath, [path.join(ROOT, 'src', 'bridge.js')], {
     cwd: ROOT,
-    stdio: ['ignore', out, out],
+    stdio: ['ignore', 'ignore', out],
     windowsHide: true
   });
   child.on('exit', (code) => {
@@ -1722,6 +1900,34 @@ const server = http.createServer(async (req, res) => {
         fs.mkdirSync(ROLES_DIR, { recursive: true });
         fs.writeFileSync(file, JSON.stringify(pack, null, 2) + '\n', 'utf8');
         return json(res, 200, { ok: true, pack, file: path.relative(ROOT, file) });
+      }
+      // ── 会话历史：自动整理未必合心意，这里让人自己看、自己删 ──────────
+      if (sub === 'reveal' && req.method === 'POST') {
+        const body = JSON.parse((await readBody(req)) || '{}');
+        try { json(res, 200, revealDataFile(body.file)); }
+        catch (e) { json(res, 400, { ok: false, error: e.message }); }
+        return;
+      }
+      if (sub === 'sessions' && req.method === 'GET') {
+        return json(res, 200, { ok: true, ...listStandaloneSessions() });
+      }
+      if (sub === 'session' && req.method === 'GET') {
+        const id = String(url.searchParams.get('id') ?? '').trim();
+        const full = url.searchParams.get('full') === '1';
+        try {
+          return json(res, 200, { ok: true, ...readStandaloneSession(id, full) });
+        } catch (e) {
+          return json(res, 400, { ok: false, error: e?.message ?? String(e) });
+        }
+      }
+      if (sub === 'session' && req.method === 'POST') {
+        let input = {};
+        try { input = JSON.parse((await readBody(req)) || '{}'); } catch { input = {}; }
+        try {
+          return json(res, 200, { ok: true, ...(await editStandaloneSession(input)) });
+        } catch (e) {
+          return json(res, 400, { ok: false, error: e?.message ?? String(e) });
+        }
       }
       if (req.method === 'POST' && sub === 'config') {
         const input = JSON.parse((await readBody(req)) || '{}');

@@ -79,6 +79,18 @@ h1 { margin: 4px 0 4px; font-size: 21px; font-weight: 650; letter-spacing: -.2px
 .ver-n { font-weight: 600; font-size: 14px; font-variant-numeric: tabular-nums; }
 .ver-b { display: flex; align-items: center; }
 .ver-a { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.sess-list { display: flex; flex-direction: column; gap: 6px; padding: 12px; }
+.sess-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; font-size: 13px; }
+.sess-item:hover { border-color: var(--accent); }
+.sess-item.on { border-color: var(--accent); background: rgba(88,140,255,.10); }
+.sess-item .sid { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
+.sess-item .meta { margin-left: auto; opacity: .65; font-size: 12px; white-space: nowrap; }
+.msg-row { display: grid; grid-template-columns: 22px 34px 72px 62px minmax(0,1fr); gap: 8px; padding: 7px 14px; border-bottom: 1px solid var(--line); font-size: 12.5px; align-items: start; cursor: default; }
+.msg-row:hover { background: rgba(255,255,255,.03); }
+.msg-row .idx { opacity: .45; }
+.msg-row .role { font-weight: 600; }
+.msg-row .len { opacity: .65; }
+.msg-row .txt { white-space: pre-wrap; word-break: break-word; opacity: .8; }
 .stk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 14px; padding: 16px; }
 .stk-item { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
 .stk-item img { width: 100%; height: 132px; object-fit: contain; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; }
@@ -510,6 +522,7 @@ const NAV = [
     { id: 'usage',    label: '令牌用量', svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9M9.5 10h4a1.8 1.8 0 010 3.6h-3"/></svg>' , self: true },
     { id: 'access',   label: '访问与安全', svg: '<svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>' },
     { id: 'operations', label: '调试与运维', svg: '<svg viewBox="0 0 24 24"><path d="M15 4a4.5 4.5 0 00-4 6.7L4 17.6 6.4 20l6.9-7a4.5 4.5 0 005.7-6.2l-2.6 2.6-2.4-2.4z"/></svg>' },
+    { id: 'sessionhist', label: '会话历史', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg>' },
     { id: 'stickers',  label: '表情包', self: true, svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M9 15c1.2 1 3.6 1 4.8 0"/></svg>' },
     { id: 'update',     label: '版本与更新', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M12 4v10"/><path d="M8 11l4 4 4-4"/><path d="M5 19h14"/></svg>' },
     { id: 'reference',  label: '工具参考', svg: '<svg viewBox="0 0 24 24"><path d="M5 4h9a3 3 0 013 3v13H8a3 3 0 01-3-3z"/><path d="M17 7h2v13h-2M8 8h6M8 12h6"/></svg>' }
@@ -936,6 +949,117 @@ qqView.innerHTML = head('QQ LAUNCH', 'QQ 启动', '网关是往正在运行的 Q
 
 </div>`;
 $('main').appendChild(qqView);
+
+// ── 自建页：会话历史 ─────────────────────────────────────
+const sessionsView = document.createElement('section');
+sessionsView.className = 'view';
+sessionsView.dataset.view = 'sessionhist';
+sessionsView.hidden = true;
+sessionsView.style.maxWidth = '1200px';
+sessionsView.style.margin = '0 auto';
+sessionsView.innerHTML = head('SESSIONS', '会话历史', '机器人记着的东西都在这里。看、删、截断都行，改完自动重启机器人让它重新读。') + `
+<div class="grid">
+  <div class="card">
+    <div class="card-head">
+      <h2 class="card-title">会话 <span class="badge" id="sess-count">—</span></h2>
+      <button class="ghost" id="sess-refresh">刷新</button>
+    </div>
+    <div id="sess-list" class="sess-list"><div class="hint" style="padding:12px">读取中…</div></div>
+  </div>
+  <div class="card span2">
+    <div class="card-head">
+      <h2 class="card-title" id="sess-title">选一个会话</h2>
+      <div class="field-actions" style="margin:0">
+        <input id="sess-keep" type="number" min="1" max="200" value="6" style="width:62px" title="只留最后几条">
+        <button class="ghost" id="sess-trim">只留最后 N 条</button>
+        <button class="ghost" id="sess-clearsum">清空摘要</button>
+        <button class="ghost" id="sess-del">删除勾选的</button>
+        <button class="ghost" id="sess-full">展开全文</button>
+      <button class="ghost" id="sess-open-social">打开 social-v2.json</button>
+      </div>
+    </div>
+    <div id="sess-msgs" style="max-height:62vh;overflow:auto"><div class="hint" style="padding:16px">左边点一个会话。</div></div>
+    <div class="hint" style="padding:12px 16px" id="sess-note">删除是成对删的：如果某条 tool 返回对应的那轮工具调用全被删了，会连那条 assistant 一起删 —— 不然会留下孤儿 tool_call_id，下一轮请求直接 400。</div>
+  </div>
+</div>`;
+$('main').appendChild(sessionsView);
+
+const sessSel = new Set();
+let sessState = { list: [], current: null };
+
+async function loadSessions() {
+  const box = $('sess-list');
+  if (!box) return;
+  try {
+    const r = await api('sessions');
+    sessState.list = Array.isArray(r.sessions) ? r.sessions : [];
+    $('sess-count').textContent = String(sessState.list.length);
+    box.innerHTML = sessState.list.map((s) => `
+      <div class="sess-item${sessState.current === s.id ? ' on' : ''}" data-sid="${s.id}">
+        <span class="sid">${escVer(s.id)}</span>
+        ${s.blocked ? '<span class="badge off">已暂停</span>' : ''}
+        <span class="meta">${s.messages} 条 · ${s.chars.toLocaleString()} 字 · 摘要 ${s.summaryChars}</span>
+      </div>`).join('') || '<div class="hint" style="padding:12px">没有会话。</div>';
+    box.querySelectorAll('[data-sid]').forEach((el) => {
+      el.onclick = () => void openSession(el.dataset.sid);
+    });
+  } catch (e) {
+    box.innerHTML = '<div class="hint" style="padding:12px">读取失败：' + escVer(e.message) + '</div>';
+  }
+}
+
+async function openSession(id, full = true) {
+  sessState.current = id;
+  sessState.full = !!full;
+  sessSel.clear();
+  $('sess-title').textContent = id;
+  const box = $('sess-msgs');
+  box.innerHTML = '<div class="hint" style="padding:16px">读取中…</div>';
+  try {
+    const r = await api('session?id=' + encodeURIComponent(id) + (full ? '&full=1' : ''));
+    const blockedBar = r.blocked
+      ? `<div style="margin:10px 12px;padding:10px 12px;border:1px solid var(--warn);border-radius:9px;background:rgba(230,160,60,.10);font-size:13px;line-height:1.7">
+           <b>这个会话被暂停了</b>（${escVer(r.blockedAt)}）。模型那边最近一次请求被内容审核拦下，之后不会再发请求。<br>
+           原因：${escVer(r.blockedError)}<br>
+           处理：删掉上面几条可疑消息（勾选 → 删除勾选的），再点下面的「解除暂停」，机器人会重新开始回应。
+           <div class="field-actions" style="margin-top:8px"><button class="btn" id="sess-unblock">解除暂停</button></div>
+         </div>`
+      : '';
+    box.innerHTML = blockedBar + r.messages.map((m) => `
+      <label class="msg-row">
+        <input type="checkbox" data-i="${m.index}">
+        <span class="idx">${m.index}</span>
+        <span class="role">${escVer(m.role)}</span>
+        <span class="len">${m.chars} 字</span>
+        <span class="txt">${escVer(full && m.content ? m.content : m.preview)}</span>
+      </label>`).join('') || '<div class="hint" style="padding:16px">这个会话是空的。</div>';
+    box.querySelectorAll('input[data-i]').forEach((cb) => {
+      cb.onchange = () => {
+        const i = Number(cb.dataset.i);
+        if (cb.checked) sessSel.add(i); else sessSel.delete(i);
+      };
+    });
+    if ($('sess-unblock')) $('sess-unblock').onclick = () => void editSession({ mode: 'unblock' });
+    if ($('sess-full')) $('sess-full').textContent = full ? '收起全文' : '展开全文';
+    await loadSessions();
+  } catch (e) {
+    box.innerHTML = '<div class="hint" style="padding:16px">读取失败：' + escVer(e.message) + '</div>';
+  }
+}
+
+async function editSession(body) {
+  if (!sessState.current) { toast('先选一个会话', true); return; }
+  const note = $('sess-note');
+  note.textContent = '正在写入…';
+  try {
+    const r = await api('session', { method: 'POST', body: JSON.stringify({ id: sessState.current, ...body }) });
+    note.textContent = '已保存：' + r.before + ' → ' + r.after + ' 条，摘要 ' + r.summaryChars + ' 字；备份 ' + r.backup + (r.restarted ? '；机器人已重启' : '') + '。';
+    await openSession(sessState.current);
+  } catch (e) {
+    note.textContent = '失败：' + e.message;
+    toast('保存失败：' + e.message, true);
+  }
+}
 
 // ── 自建页：版本与更新 ──────────────────────────────────
 // 三条线各管各的：程序本身（GitHub Release）、协议端 SnowLuma、本机 QQ 客户端。
@@ -1928,7 +2052,8 @@ function go(id) {
     if (id === 'close') void loadCloseSetting();
     if (id === 'chat') void loadChat();
     if (id === 'qzone') void loadQzone();
-    if (id === 'qq') { void loadQQ(); }
+    if (id === 'sessionhist') void loadSessions();
+  if (id === 'qq') { void loadQQ(); }
     if (id === 'update') { void loadVersion(false); }
     if (id === 'stickers') void loadStickers(false);
   if (id === 'start') void loadStart();
@@ -3571,6 +3696,26 @@ async function loadVersion(force) {
     if (body) body.innerHTML = '<div class="hint">检查失败：' + escVer(e.message) + '</div>';
   }
 }
+if ($('sess-refresh')) $('sess-refresh').onclick = () => void loadSessions();
+if ($('sess-open-social')) $('sess-open-social').onclick = async () => {
+  try {
+    const r = await api('reveal', { method: 'POST', body: JSON.stringify({ file: 'social' }) });
+    toast('已在资源管理器里定位：' + r.path + '（改完记得让机器人重启，否则内存里还是旧的）');
+  } catch (e) {
+    toast('打开失败：' + e.message, true);
+  }
+};
+if ($('sess-full')) $('sess-full').onclick = () => {
+  if (!sessState.current) { toast('先选一个会话', true); return; }
+  void openSession(sessState.current, !sessState.full);
+};
+if ($('sess-del')) $('sess-del').onclick = () => {
+  if (!sessSel.size) { toast('先勾几条', true); return; }
+  void editSession({ mode: 'delete', indices: [...sessSel] });
+};
+if ($('sess-trim')) $('sess-trim').onclick = () => void editSession({ mode: 'keepLast', count: Number($('sess-keep').value) || 6 });
+if ($('sess-clearsum')) $('sess-clearsum').onclick = () => void editSession({ mode: 'clearSummary' });
+
 if ($('ver-refresh')) $('ver-refresh').onclick = function () { void loadVersion(true); };
 
 // ── 表情包 ──────────────────────────────────────────────

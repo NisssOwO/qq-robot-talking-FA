@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
 import { createBackend } from './backend/contract.mjs';
+import { clearFailedWakeTurn } from './turn-outcome.mjs';
 import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-plain.js';
 import { SENSITIVE_RE } from './sensitive.js';
 import { looksLikeUnfinished } from './v2-wait.js';
@@ -935,18 +936,20 @@ function loadConfig() {
       send: {
         burstEnabled: true,
         burstMaxMessages: 8,
-        burstIntervalMinMs: 1000,
-        burstIntervalMaxMs: 3000,
-        longGapProbability: 0.2,
-        longGapMinMs: 5000,
-        longGapMaxMs: 10000,
-        maxSendPerMinute: 8,
-        maxSendPerHour: 60,
+        burstIntervalMinMs: 2000,
+        burstIntervalMaxMs: 8000,
+        longGapProbability: 0.25,
+        longGapMinMs: 8000,
+        longGapMaxMs: 15000,
+        maxSendPerMinute: 4,
+        maxSendPerHour: 36,
         maxMessageChars: 500,
         maxGapMs: 10000,
         gapBaseMs: 800,
         gapPerCharMs: 20,
-        recommendedHint: '普通闲聊建议一次 1~3 条，条间 1~3 秒；讲故事/回忆可以 5~10 秒间隔；不要连续刷屏。'
+        reconnectCooldownMinMs: 600000,
+        reconnectCooldownMaxMs: 1800000,
+        recommendedHint: '普通闲聊建议一次 1~3 条，条间 2~8 秒随机，长间隔 8~15 秒；不要连续刷屏。'
       },
       wait: {
         defaultMs: 30000,
@@ -10107,7 +10110,7 @@ async function main() {
     if (opts.farewell) social.exitingSessions.add(sessionId);
     let accepted;
     try {
-      accepted = await api.sessions.prompt({ sessionId, mode: 'queue', content });
+      accepted = await api.sessions.prompt({ sessionId, mode: 'queue', content, system: roleCardForSystem() });
     } catch (error) {
       if (opts.farewell) social.exitingSessions.delete(sessionId);
       throw error;
@@ -10525,6 +10528,22 @@ async function main() {
       }
     }
     return kept.join('\n');
+  }
+
+  /**
+   * 这一轮随请求带给模型的角色卡——走 system，不写进历史。
+   *
+   * 为什么不让它留在 user 消息里：bridge 会把每条 user 消息存进会话历史，
+   * 角色卡跟着进去就变成「每轮一份」，聊到一百多条时同一个卡在历史里重复十几遍。
+   * 单条能过审核，叠十几遍加一长串对话就不行了（服务商报 data_inspection_failed）。
+   * 走 system 则每轮都在、却不落盘，换角色卡也不用调任何参数。
+   *
+   * 只给独立后端：DSH 那边的 system 由预设决定，外部再塞一层会跟预设打架。
+   */
+  function roleCardForSystem() {
+    if (cfg.backend !== 'standalone') return undefined;
+    if (!readRoleState().role) return undefined;
+    return currentRoleHintV2() || undefined;
   }
 
   // QQ 群成员名片/昵称缓存：@ 段解析用，避免每条消息都调一次 OneBot API。
@@ -11189,9 +11208,12 @@ async function main() {
     // 角色卡直接塞进唤醒提示，而不是只给一行「请调用 qq_get_prompt 查看」：
     // standalone 后端下模型经常不调 qq_get_prompt 就先开口，结果整轮裸跑没有人设，
     // 说出来的话是一股助手腔。卡本身 2-3K 字，放这里换来的稳定性比省这点 token 值。
-    const roleCard = roleState.role ? currentRoleHintV2() : '';
-    const roleLine = roleCard
-      ? `${roleCard}\n\n（上面是你的完整角色卡，已经在你手里，不需要再调用 qq_get_prompt 取人设；想刷推荐值/工具信息时再调。）\n\n`
+    // 角色卡不再拼进这里：改走 api.sessions.prompt 的 system 参数（见 roleCardForSystem）。
+    // 塞进 user 消息的话会被当成对话存进历史，聊到一百多条时历史里会堆十几份一模一样的卡，
+    // 服务商的输入内容审核就会判定超线（阿里云百炼 data_inspection_failed）。
+    // 这里只留一行指路，让模型知道人设已经在 system 里、不用再去调 qq_get_prompt。
+    const roleLine = roleState.role
+      ? '（你的完整角色卡在 system 消息里，不需要再调用 qq_get_prompt 取人设；想刷推荐值/工具信息时再调。）\n\n'
       : '';
     const identityLine = selfIdentityTextV2();
     const st = getSocialV2State(key);
@@ -12647,7 +12669,8 @@ ${recentBlock}
     const accepted = await api.sessions.prompt({
       sessionId,
       mode: 'queue',
-      content
+      content,
+      system: roleCardForSystem()
     });
     if (!accepted.result.ok) {
       const errText = `${accepted.result.error.code}: ${accepted.result.error.message}`;
@@ -12939,6 +12962,14 @@ ${recentBlock}
       collectors.delete(sessionId);
       v2TurnStartAt.delete(sessionId);
       turnLeaseNoted.delete(sessionId);
+      // 这条路径说明回合收尾没走下面那个完整分支（重连后只收到 turn/end，
+      // 或这一轮完全没有产出、collector 是空的）。待唤醒标记必须在这儿自己清，
+      // 否则 pendingWakeKeys 会一直挂着这个会话，之后每条消息都被判「繁忙」永远叫不醒。
+      const staleKey = reverse.get(sessionId);
+      if (staleKey) {
+        pendingWakeKeys.delete(staleKey);
+        disarmPendingWakeLease(staleKey);
+      }
     }
     return { collector, ended };
   }
@@ -13063,7 +13094,7 @@ ${recentBlock}
               // 则累计 noActionCount；达到阈值后自动重置 WakeConfig，避免 AI 卡死。
               const silentQueueNow = social.silentTurns.get(frame.sessionId) ?? [];
               const isSilentTurn = silentQueueNow.length > 0;
-              if (currentMode === 'reserved2' && key && !isSilentTurn) {
+              if (currentMode === 'reserved2' && key && !isSilentTurn && ended.reason?.kind === 'completed') {
                 const st = getSocialV2State(key);
                 const turnStart = v2TurnStartAt.get(frame.sessionId) ?? 0;
                 const sendToolHit = sendToolSucceededSessions.has(frame.sessionId);
@@ -13098,6 +13129,9 @@ ${recentBlock}
               // 标记本次 turn 是否为“活跃超时退场”发言（用于准确回到观望，避免把旧回复误判为退场）
               const isFarewell = social.exitingSessions.has(frame.sessionId);
               if (isFarewell) social.exitingSessions.delete(frame.sessionId);
+              const failedTurn = clearFailedWakeTurn(ended, key, {
+                pendingWakeKeys, disarmPendingWakeLease, wakeConfigUpdatedKeys, markReadCalledKeys, wakeConfigMissCount
+              });
               // 摘要投喂触发的 turn：回复静默（不发送到 QQ）。
               // 用 FIFO 时间戳队列 + 超时回收，避免计数残留吞掉后续正常回复。
               const silentQueue = social.silentTurns.get(frame.sessionId) ?? [];
@@ -13108,6 +13142,19 @@ ${recentBlock}
                 if (silentQueue.length > 0) social.silentTurns.set(frame.sessionId, silentQueue);
                 else social.silentTurns.delete(frame.sessionId);
                 log(`摘要投喂 turn 结束，静默 (${key})`);
+                continue;
+              }
+              if (failedTurn) {
+                // Preserve unread messages and queued wake reasons for owner review/new input.
+                // Never remind, auto-replay, or forward partial assistant output after failure.
+                // 内容审核拦停的会话：模型不会再回话，得让群里知道原因，否则看起来像死机。
+                if (ended?.reason?.audit && ended?.reason?.notify) {
+                  const [nk, nid] = String(key).split(':');
+                  void onebotSend(nk, nid, '我这边卡住了：刚才那段内容被服务商审核挡下来了，我先停在这儿等你处理。面板 →「会话历史」里能看到这一段，删掉几句再点保存就好。')
+                    .catch((e) => log(`[standalone] 审核暂停通知发送失败（${key}）：${e?.message ?? e}`));
+                }
+                log(`[standalone] 失败回合已停止自动后续处理 (${key})：${ended.reason.apiCode || ended.reason.code || 'turn_failed'}`);
+                appendActivity(`${key} 模型回合失败，未自动重试；请检查脱敏诊断`);
                 continue;
               }
               // reserved2 防遗忘：每次唤醒回合结束时，若 AI 没有调用 qq_set_wake_config 设置下一次唤醒条件，
@@ -13443,6 +13490,31 @@ ${recentBlock}
     }
   }
 
+  // ── 掉线冷却闸（防腾讯风控）：真实掉线后 10~30 分钟才自动重连 ──
+  // SDK 自带的退避重连封顶 30 秒（reconnect:true → minDelayMs 1000 / ×2^n / maxDelayMs 30000），
+  // 撑不到冷却时长，所以由这里接管：真掉线 → bot.close()（停 SDK 自动重连）+ 冷却计时，
+  // 冷却结束再 bot.connect()。启动期 close(1006)/首次连不上走原逻辑（秒级自愈），不吃冷却。
+  const RECONNECT_COOLDOWN_MIN_MS = Number(cfg.socialV2?.send?.reconnectCooldownMinMs) || 600_000;    // 默认 10 分钟
+  const RECONNECT_COOLDOWN_MAX_MS = Number(cfg.socialV2?.send?.reconnectCooldownMaxMs) || 1_800_000; // 默认 30 分钟
+  let reconnectGateTimer = null;
+  let reconnectGateActive = false;
+  function armReconnectGate(reason) {
+    if (reconnectGateTimer || reconnectGateActive) return; // 已在冷却中，不重置、不叠加
+    const wait = RECONNECT_COOLDOWN_MIN_MS
+      + Math.floor(Math.random() * (RECONNECT_COOLDOWN_MAX_MS - RECONNECT_COOLDOWN_MIN_MS + 1));
+    reconnectGateActive = true;
+    snowlumaHealth.connected = false;
+    log(`⏳ ${reason}，进入约 ${Math.round(wait / 60000)} 分钟冷却，期间不自动重连，结束后再试`);
+    // 停掉 SDK 自动重连（closedByUser=true 并清掉它挂起的重连定时器），由下面的定时器接管
+    try { bot.close(1000, 'cooldown'); } catch {}
+    reconnectGateTimer = setTimeout(() => {
+      reconnectGateTimer = null;
+      reconnectGateActive = false;
+      log('⏳ 冷却结束，尝试重连 SnowLuma…');
+      try { void bot.connect(); } catch (error) { log(`冷却后重连失败：${error?.message ?? error}`); }
+    }, wait);
+  }
+
   // QQ 侧（SnowLuma OneBot WebSocket 客户端）
   const bot = new SnowLumaWebSocketClient({
     url: cfg.snowluma.wsUrl,
@@ -13501,6 +13573,7 @@ ${recentBlock}
       if (sub === 'offline') {
         log('⚠️ SnowLuma 报告 QQ 账号会话已离线（bot_status: offline）—— QQ 侧掉线或被顶号，'
           + '在重新登录之前群里不会有任何消息进来。');
+        armReconnectGate('QQ 账号会话离线（bot_status: offline，可能被顶号/风控）');
       } else if (sub === 'online') {
         log('SnowLuma 报告 QQ 账号会话已上线（bot_status: online）');
       }
@@ -13629,12 +13702,15 @@ ${recentBlock}
   }
 
   bot.on('close', (info) => {
+    const wasConnected = snowlumaHealth.connected;
     snowlumaHealth.connected = false;
     log(`SnowLuma 连接断开（code=${info?.code ?? '?'}），重连中…`);
     // 连不上时最常见的原因就是换了 QQ 账号 → token 变了；顺手自愈。
     // 注意 1006 在**每次启动**都可能出现一次：HTTP token 与 WS token 是两个不同的值，
     // config.json 里存的是前者，WS 需要用自愈发现的那个（详见 bot.connect() 处的说明）。
     void healTokenIfStale(`close code=${info?.code ?? '?'}`);
+    // 之前已连上才叫真实掉线（吃 10~30 分钟冷却）；启动期 close(1006) 走 SDK 秒级自愈
+    if (wasConnected) armReconnectGate(`连接断开（close code=${info?.code ?? '?'}）`);
   });
   bot.on('error', (error) => {
     // SDK 在 WS 升级被拒（401 / 建连失败）时可能**只 emit error、不 emit close**，
@@ -13645,6 +13721,8 @@ ${recentBlock}
       : String(error ?? '');
     log(`SnowLuma 错误：${detail || '(无详情)'}`);
     void healTokenIfStale(`error ${detail}`.trim().slice(0, 200));
+    // error 不 emit close 时兜底：之前已连上且出错 → 同样上冷却闸（否则可能反复 401 空转）
+    if (snowlumaHealth.connected) armReconnectGate('连接错误（未触发 close）');
   });
 
   // SnowLuma 尚未就绪时不阻塞桥接启动：SDK 自带后台重连，DSH 侧照常连接。

@@ -44,6 +44,7 @@ scripts/*
 !scripts/patch-snowluma-sdk.mjs
 !scripts/sync-standalone-prompts.mjs
 !scripts/test-quiet-hours.mjs
+!scripts/test-model-failure.mjs
 !scripts/restore-user-data.mjs
 
 # 含个人数据，不随仓库分发
