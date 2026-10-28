@@ -751,6 +751,21 @@ async function switchChannel(channel) {
   await refreshOfficial();
 }
 
+// 把角色卡推给官方通道进程（走面板自己的 /panel/api/official/role）。
+// 传空串 = 用 state/current-role.json 里当前那个角色。
+async function pushOfficialRole(role) {
+  try {
+    const res = await fetch('/panel/api/official/role', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ role: String(role || '') })
+    });
+    return await res.json();
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 // 角色列表复用控制台已有的 /api/roles，切角色也走同一个接口，
 // 这样两条通道共用一份 roles/ 与 state/current-role.json，不用各存一份。
 async function loadOfficialRoles() {
@@ -765,7 +780,9 @@ async function loadOfficialRoles() {
     box.innerHTML = `<div class="field" style="padding:0"><label>当前角色</label>
       <select id="of-rolesel">${list.map((n) => `<option value="${esc(n)}" ${n === cur ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></div>
       <button class="btn primary" id="of-rolesave" style="margin-top:10px">切换</button>
-      <div class="hint" style="margin-top:8px">面板主人专用；群友那边只能看到结果，没有切换入口。</div>`;
+      <button class="btn" id="of-rolepush" style="margin-top:10px;margin-left:8px">重新推送角色卡</button>
+      <div class="hint" style="margin-top:8px">面板主人专用；群友那边只能看到结果，没有切换入口。切换会把角色卡正文推给官方插件（它当作 system prompt 用），下一条消息就生效，不用重启通道。</div>`;
+    // 切换 = 写 state/current-role.json（两条通道共用）+ 立刻推给官方插件。
     box.querySelector('#of-rolesave').onclick = async () => {
       const role = box.querySelector('#of-rolesel').value;
       try {
@@ -774,8 +791,18 @@ async function loadOfficialRoles() {
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ role })
         })).json();
-        if (res.ok === false) alert(res.error || '切换失败');
-        else alert(`已切到「${role}」，下一条消息生效。`);
+        if (res.ok === false) { alert(res.error || '切换失败'); return; }
+        const pushed = await pushOfficialRole(role);
+        if (pushed.ok) alert(`已切到「${role}」，已同步到官方通道（${pushed.chars} 字），下一条消息生效。`);
+        else if (pushed.code === 'not-running') alert(`已切到「${role}」。官方通道没在跑，启动时会自动推送角色卡。`);
+        else alert(`已切到「${role}」，但同步到官方通道失败：${pushed.error}`);
+      } catch (e) { alert(e.message); }
+    };
+    box.querySelector('#of-rolepush').onclick = async () => {
+      try {
+        const pushed = await pushOfficialRole('');
+        if (pushed.ok) alert(`已推送角色卡「${pushed.role}」（${pushed.chars} 字）。`);
+        else alert(pushed.error || '推送失败');
       } catch (e) { alert(e.message); }
     };
   } catch (e) {

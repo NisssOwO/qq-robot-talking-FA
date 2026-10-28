@@ -1656,7 +1656,7 @@ async function main() {
     }
     try {
       const count = Math.min(500, Math.max(1, Number(cfg.socialV2?.sticker?.maxListCount) || 100));
-      const response = await activeBot.request('fetch_custom_face_detail', { count });
+      const response = await bot.request('fetch_custom_face_detail', { count });
       if (!response || response.status !== 'ok' || response.retcode !== 0) {
         throw new Error(`fetch_custom_face_detail 失败: ${response?.wording || response?.retcode || 'unknown'}`);
       }
@@ -8128,6 +8128,12 @@ async function main() {
     const [kind, id] = key.split(':');
     const parts = splitForQQ(safeMsg);
     lastSendFailed.delete(key);
+    // 官方通道模式下没有 OneBot 客户端：不要用 TypeError 糊过去，留一条能看懂的话。
+    if (!bot) {
+      lastSendFailed.set(key, true);
+      log(`QQ 发送跳过 (${key}): 当前是官方通道模式，OneBot 客户端未连接`);
+      return sendChain;
+    }
     for (const part of parts) {
       sendChain = sendChain
         .then(async () => {
@@ -8304,6 +8310,11 @@ async function main() {
   function sendBurstToQQ(key, messages, socialCfgOrMin, maybeMax) {
     const assertSendAllowed = captureSendGuard(key);
     const [kind, id] = key.split(':');
+    if (!bot) {
+      log(`QQ 发送跳过 (${key}): 当前是官方通道模式，OneBot 客户端未连接`);
+      lastSendFailed.set(key, true);
+      return sendChain;
+    }
     let min, max, longProb = 0, longMin = 0, longMax = 0;
     if (typeof socialCfgOrMin === 'object' && socialCfgOrMin !== null) {
       const cfg = socialCfgOrMin;
@@ -13510,10 +13521,11 @@ ${recentBlock}
   const RECONNECT_COOLDOWN_MAX_MS = Number(cfg.socialV2?.send?.reconnectCooldownMaxMs) || 1_800_000; // 默认 30 分钟
   let reconnectGateTimer = null;
   let reconnectGateActive = false;
-  // 官方通道下这一段（包含 bot）根本不执行，armReconnectGate 也永远不会被调度；
-  // 但它的函数体里引用了 bot，留着裸引用会让「有人手滑调一次」直接 ReferenceError。
-  // 所以用一个可空引用解耦：onebot 时由下面的 if 块赋值。
-  let activeBot = null;
+  // 官方通道下不建 OneBot 客户端，bot 一直是 null；但本函数（以及下面几十个成员函数）
+  // 里的发送/取图/拍一拍等路径都写在 if 块外面，它们闭包引用的是**这个** bot。
+  // 所以 bot 必须声明在函数作用域里，不能塞进下面的 if 块——1.0.8.fix1 把它写成了
+  // if 块内的 const，结果所有 OneBot 发送路径一调用就 "bot is not defined"（14:15 那次）。
+  let bot = null;
   function armReconnectGate(reason) {
     if (reconnectGateTimer || reconnectGateActive) return; // 已在冷却中，不重置、不叠加
     const wait = RECONNECT_COOLDOWN_MIN_MS
@@ -13522,12 +13534,12 @@ ${recentBlock}
     snowlumaHealth.connected = false;
     log(`⏳ ${reason}，进入约 ${Math.round(wait / 60000)} 分钟冷却，期间不自动重连，结束后再试`);
     // 停掉 SDK 自动重连（closedByUser=true 并清掉它挂起的重连定时器），由下面的定时器接管
-    try { activeBot?.close(1000, 'cooldown'); } catch {}
+    try { bot?.close(1000, 'cooldown'); } catch {}
     reconnectGateTimer = setTimeout(() => {
       reconnectGateTimer = null;
       reconnectGateActive = false;
       log('⏳ 冷却结束，尝试重连 SnowLuma…');
-      try { void activeBot?.connect(); } catch (error) { log(`冷却后重连失败：${error?.message ?? error}`); }
+      try { void bot?.connect(); } catch (error) { log(`冷却后重连失败：${error?.message ?? error}`); }
     }, wait);
   }
 
@@ -13536,14 +13548,13 @@ ${recentBlock}
   // official：连腾讯官方 Bot（在 ~/.dsh/profiles/qqbot 里跑），本进程不连 SnowLuma，
   //           仍然提供面板与控制台，角色卡照常由 /api/roles 读写。
   if (cfg.qqChannel !== 'official') {
-    // QQ 侧（SnowLuma OneBot WebSocket 客户端）
-    const bot = new SnowLumaWebSocketClient({
+    // QQ 侧（SnowLuma OneBot WebSocket 客户端）——赋值给函数作用域里的 bot，
+    // 让 if 块外面的发送/取图路径也能拿到（那些路径是 OneBot 专用，官方通道下不触发）。
+    bot = new SnowLumaWebSocketClient({
       url: cfg.snowluma.wsUrl,
       accessToken: cfg.snowluma.accessToken || undefined,
       reconnect: true
     });
-    // 冷却闸在上面那段函数里定义（它比 if 更外层），用 activeBot 把真实客户端接过去。
-    activeBot = bot;
 
     bot.onPrivateMessage(async (event) => {
       // 统一按字符串比较：网关可能把 id 序列化成 number/string 混用，

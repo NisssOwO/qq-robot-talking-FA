@@ -35,6 +35,43 @@ if (fs.existsSync(preservedConfigPath)) {
   }
 }
 
+// state/ 里的东西同理，而且更隐蔽：当前角色（current-role.json）、收藏表情库、
+// 会话、用量统计全在里面。打包把它清成空目录，使用者一打开就发现「人格卡没了」
+// ——角色卡文件还在 roles/，丢的是「当前选的是哪一张」。发布包必须干净，所以
+// 只有显式 --keep-state（本机自用构建）才抢救，release/安装包照旧清空。
+const keepState = argv.includes('--keep-state');
+let preservedStateDir = null;
+const preservedStatePath = path.join(OUT, 'state');
+if (keepState && fs.existsSync(preservedStatePath)) {
+  preservedStateDir = `${OUT}-state-backup`;
+  fs.rmSync(preservedStateDir, { recursive: true, force: true });
+  fs.cpSync(preservedStatePath, preservedStateDir, { recursive: true });
+  console.log(`发现已有 state，打包结束后会原样恢复：${preservedStatePath}`);
+}
+
+// roles/ 里的自建卡同理：面板「角色卡」页新建的卡只存在于打包版目录里，源码
+// roles/ 没有它，重新打包会把整个目录删掉——1.0.8 那次就是这么丢的。--keep-state
+// 时把「源码里没有的文件」先收起来，打完再放回；同名卡仍以源码为准（方便上游更新
+// 内置角色），发布包不带任何个人卡。
+let preservedRoleFiles = null;
+const preservedRolesPath = path.join(OUT, 'roles');
+if (keepState && fs.existsSync(preservedRolesPath)) {
+  const sourceRolesDir = path.join(ROOT, 'roles');
+  const sourceNames = new Set(fs.existsSync(sourceRolesDir) ? fs.readdirSync(sourceRolesDir) : []);
+  const extra = fs
+    .readdirSync(preservedRolesPath, { withFileTypes: true })
+    .filter((e) => e.isFile() && !sourceNames.has(e.name))
+    .map((e) => e.name);
+  if (extra.length) {
+    const backupDir = `${OUT}-roles-backup`;
+    preservedRoleFiles = { dir: backupDir, names: extra };
+    fs.rmSync(backupDir, { recursive: true, force: true });
+    fs.mkdirSync(backupDir, { recursive: true });
+    for (const name of extra) fs.copyFileSync(path.join(preservedRolesPath, name), path.join(backupDir, name));
+    console.log(`发现 ${extra.length} 张自建角色卡，打包结束后会放回：${extra.join('、')}`);
+  }
+}
+
 if (fs.existsSync(OUT)) {
   const underDist = OUT.startsWith(path.join(ROOT, 'dist') + path.sep);
   if (!underDist && !argv.includes('--out')) {
@@ -47,6 +84,28 @@ if (fs.existsSync(OUT)) {
   fs.rmSync(OUT, { recursive: true, force: true });
 }
 fs.mkdirSync(OUT, { recursive: true });
+
+// 个人角色卡（.gitignore 里点名排除的，如 roles/芹泽朝日.*）只属于本机：本机构建
+// （--keep-state）照旧带上，发布构建（dist/release，安装包）必须剔除。判定交给
+// git check-ignore，免得在脚本里硬编码名字。
+function personalRoleNames() {
+  const dir = path.join(ROOT, 'roles');
+  if (!fs.existsSync(dir)) return new Set();
+  const names = fs.readdirSync(dir).filter((n) => /\.(md|pack\.json)$/i.test(n));
+  if (!names.length) return new Set();
+  try {
+    // -z：NUL 分隔、不转义非 ASCII 路径，否则中文卡名会变成 "roles/\350\212..." 这种转义串。
+    const out = execFileSync('git', ['-C', ROOT, 'check-ignore', '--no-index', '-z', '--stdin'], {
+      input: names.map((n) => `roles/${n}`).join('\0') + '\0',
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    return new Set(out.split('\0').map((l) => path.basename(l.trim())).filter(Boolean));
+  } catch {
+    // 退出码 1 = 没有被忽略的文件；git 不在 PATH 时也一样，按「没有个人卡」处理。
+    return new Set();
+  }
+}
 
 function copyDir(from, to, { skip = [], filter = null } = {}) {
   if (!fs.existsSync(from)) return 0;
@@ -207,9 +266,11 @@ if (withGateway) {
 }
 
 // 3) 资源：角色卡 / 世界观 / 提示词 / 静态资源 / 音频
+const personalRoles = keepState ? new Set() : personalRoleNames();
+if (personalRoles.size) console.log(`   跳过个人角色卡（不进发布包）：${[...personalRoles].join('、')}`);
 step('roles', () => copyDir(path.join(ROOT, 'roles'), path.join(OUT, 'roles'), {
   skip: ['.backup', '.refs', '.git'],
-  filter: (name) => !/\.bak-|\.orig$|^\.DS_Store$/.test(name),
+  filter: (name) => !personalRoles.has(name) && !/\.bak-|\.orig$|^\.DS_Store$/.test(name),
 }));
 step('resources', () => copyDir(path.join(ROOT, 'resources'), path.join(OUT, 'resources')));
 step('dsh/agent-presets', () => copyDir(path.join(ROOT, 'dsh', 'agent-presets'), path.join(OUT, 'dsh', 'agent-presets'), { filter: (name) => !/[.]bak-|[.]orig$|^[.]DS_Store$/.test(name) }));
@@ -282,9 +343,43 @@ if (existing) {
 // 5b) 净化：作者本机的个性化行为规则不进发布内容（只改输出，不动源码）
 step('净化个性化内容', () => sanitizeReleaseOutput());
 
-// 6) state 目录（空）
-fs.mkdirSync(path.join(OUT, 'state'), { recursive: true });
-report.push('state/: 空目录');
+// 5c) 放回自建角色卡（--keep-state，且只放源码里没有的那些）
+if (preservedRoleFiles) {
+  const destRoles = path.join(OUT, 'roles');
+  fs.mkdirSync(destRoles, { recursive: true });
+  for (const name of preservedRoleFiles.names) {
+    fs.copyFileSync(path.join(preservedRoleFiles.dir, name), path.join(destRoles, name));
+  }
+  fs.rmSync(preservedRoleFiles.dir, { recursive: true, force: true });
+  report.push(`roles/: 放回 ${preservedRoleFiles.names.length} 张自建卡（--keep-state）：${preservedRoleFiles.names.join('、')}`);
+  preservedRoleFiles = null;
+}
+
+// 6) state 目录（默认空；--keep-state 时把本机原有的数据搬回来）
+// 唯一例外是 mode.json：新装用户必须默认进二代仿真模式（reserved2），否则
+// 桥接的兜底值是 chat —— chat 模式完全不做拟人节奏（不延迟、不分条、不抖动），
+// 装完就像个"打字机器人"。这条默认值写在这里，用户之后可以随时在面板/DSH 设置里改。
+const DEFAULT_MODE = { mode: 'reserved2', closedAgentPreset: '' };
+function writeDefaultMode() {
+  const file = path.join(OUT, 'state', 'mode.json');
+  if (fs.existsSync(file)) return false;
+  fs.writeFileSync(file, `${JSON.stringify(DEFAULT_MODE, null, 2)}\n`, 'utf8');
+  report.push('state/mode.json: 写入默认 reserved2（拟人节奏）');
+  return true;
+}
+
+if (preservedStateDir) {
+  fs.rmSync(path.join(OUT, 'state'), { recursive: true, force: true });
+  fs.cpSync(preservedStateDir, path.join(OUT, 'state'), { recursive: true });
+  fs.rmSync(preservedStateDir, { recursive: true, force: true });
+  const kept = fs.readdirSync(path.join(OUT, 'state')).filter((n) => !n.startsWith('webview2')).length;
+  report.push(`state/: 保留原有数据（--keep-state，${kept} 项）`);
+  writeDefaultMode();
+} else {
+  fs.mkdirSync(path.join(OUT, 'state'), { recursive: true });
+  writeDefaultMode();
+  report.push('state/: 空目录');
+}
 
 // 7) 启动脚本（面板版：一个窗口里配置 + 起网关 + 起机器人 + 看日志）
 const panelBat = [

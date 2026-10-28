@@ -3298,7 +3298,11 @@ document.getElementById('roleCreate').addEventListener('click', async () => {
 document.getElementById('roleDuplicate').addEventListener('click', async () => {
   const source = document.getElementById('newRoleName').value.trim();
   const content = document.getElementById('newRoleContent').value.trim();
-  const target = (prompt('把当前内容另存为新的人格，名称：', source ? source + '-副本' : '') || '').trim();
+  // 名字栏里填的这张卡还不存在时，默认就用它本身（点「另存为副本」通常是想直接建这张卡）；
+  // 已存在才补「-副本」，免得每次都逼人先删掉后缀。
+  const sourceExists = roleCache.some((role) => role.name === source);
+  const suggestion = source ? (sourceExists ? source + '-副本' : source) : '';
+  const target = (prompt('把当前内容另存为新的人格，名称：', suggestion) || '').trim();
   if (!target) return;
   const r = await api('/api/roles/create', 'POST', { name: target, content });
   if (!r.ok) { setRoleMsg('❌ ' + (r.error || '另存失败'), false); return; }

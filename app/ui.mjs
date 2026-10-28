@@ -1425,7 +1425,7 @@ function normalizeGatewayPorts() {
   return result;
 }
 
-async function startSnowLuma() {
+async function startSnowLuma({ selfHeal = true } = {}) {
   if (children.snowluma) return { ok: true, already: true };
   // 先修配置再判断：外部已在跑的网关下次重启也能拿到正确端口
   const ports = normalizeGatewayPorts();
@@ -1463,6 +1463,23 @@ async function startSnowLuma() {
     const tail = children.snowluma;
     const ok = await waitPort(ONEBOT_WS_PORT, 20000);
     if (children.snowluma !== tail) return; // 期间又被停掉或重启了，别覆盖新状态
+    if (!ok && selfHeal) {
+      // 新装、或者目录重建过（打包会清掉网关的登录数据）时有一条必经的坑：
+      // onebot_<uin>.json 是 SnowLuma 在 QQ 登录之后才自己生成的，而启动前的
+      // 那一轮 normalizeGatewayPorts() 扫的是一个空目录，什么都没改。于是它按
+      // 默认 3000/3001 起来，本程序却只认 38000/38001——现象就是「网关在跑，
+      // 38001 不开」，日志里还一直 1006。这里补一次刀：校正配置再重启网关。
+      const ports = normalizeGatewayPorts();
+      const touched = [...ports.changed, ...ports.tokenFixed];
+      if (touched.length) {
+        log(`网关自己生成的配置和本程序对不上（${touched.join('、')}），已校正，重启网关…`);
+        await stopSnowLuma();
+        await new Promise((r) => setTimeout(r, 1500));
+        // 重启时不再自愈，避免端口永远不通时无限重启。
+        const retry = await startSnowLuma({ selfHeal: false });
+        if (retry?.ok) return;
+      }
+    }
     if (!ok) {
       gatewayHint = '网关进程起来了，但 QQ 那头没接上（38001 没开）。把 QQ 完全退出（托盘图标也要退）再打开一次，然后点「刷新」。';
       log('网关进程起了，但 OneBot（38001）没开——多半是 QQ 没被重新注入');
@@ -1933,6 +1950,21 @@ const server = http.createServer(async (req, res) => {
         log('官方通道：重启');
         try { return json(res, 200, await official.restart()); }
         catch (error) { return json(res, 500, { ok: false, error: error?.message ?? String(error) }); }
+      }
+      // 角色卡注入：官方插件把 groupPrompt/directPrompt 当 system prompt 段用，
+      // 推到插件的配置接口后它自己重载，下一条消息就是新角色（不用重启进程）。
+      if (req.method === 'POST' && sub === 'official/role') {
+        let input = {};
+        try { input = JSON.parse((await readBody(req)) || '{}'); } catch { input = {}; }
+        try {
+          const r = await official.pushRolePrompt(input.role);
+          log(r.ok
+            ? `官方通道：已推送角色卡「${r.role}」（${r.chars} 字）`
+            : `官方通道：角色卡推送失败 ${r.error}`);
+          return json(res, r.ok ? 200 : (r.code === 'not-running' ? 409 : 400), r);
+        } catch (error) {
+          return json(res, 500, { ok: false, error: error?.message ?? String(error) });
+        }
       }
       // ── 通道二选一 ────────────────────────────────────────────────────
       // 写 qqChannel 之后必须重启桥接才生效（launch.mjs 和 bridge.js 都是启动时读配置）。

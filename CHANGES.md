@@ -1,5 +1,19 @@
 # 变更记录
 
+## 1.0.8.fix2 — 2026-10-28
+
+### 修复
+
+- **QQ 消息一条都发不出去（`bot is not defined`）**：1.0.8.fix1 为了支持官方通道，把 OneBot 客户端整段包进了 `if (cfg.qqChannel !== 'official') { ... }`，`const bot` 因此变成块级变量；而发送、取图、群成员、表情同步等几十处调用都在块外，每次回复都抛 `ReferenceError: bot is not defined`，被 `sendToQQ` 的 catch 吞成一行「QQ 发送失败」。现在把 `bot` 提到 `main()` 作用域（`let bot = null`，块内赋值），官方通道下未连接时发送会明确记一行「当前是官方通道模式，OneBot 客户端未连接」，不再静默失败。
+- **官方通道切角色卡不生效**：官方插件是封闭实现，没有换角色的钩子，但它会给每个 turn 注入 `config.groupPrompt` / `config.directPrompt` 作为 system prompt 段，并自带 `POST /qqbot/im-qqbot/config` 热改这两个键（保存即重载插件）。现在面板切角色时把角色卡正文推给插件，**下一条消息就生效**；通道启动后也会自动补推一次。推之前会摘掉角色卡里写死的 OneBot 工具说明（`mcp__snowluma__` / `qq_*` 那套在官方通道不存在）。
+- **新装默认进 `chat` 模式，等于没有拟人节奏**：`state/mode.json` 缺失时桥接兜底到 `chat`，不延迟、不分条、不抖动，表现就是秒回长段。打包现在会写一份默认 `{"mode":"reserved2"}`（拟人节奏）；`--keep-state` 且用户已有自己的 `mode.json` 时不动用户的。
+
+### 调整
+
+- **打包默认保留本机状态**：`npm run build` 走 `--keep-state`，`state/`（桥接模式、黑话库、二代记忆、当前角色、控制台令牌）和面板里自建的角色卡会在打包后放回，不再被 `fs.rmSync(OUT)` 一起清掉。发布构建（安装包 / 绿色包）仍然清空 state，不带个人数据。
+- **发布包不再带个人角色卡**：用 `git check-ignore` 判定，源码 `roles/` 里被忽略的那些卡不会进安装包。
+- **控制台「另存为副本」**：名字还不存在时不再自动加「-副本」，直接用它本身。
+
 ## 1.0.8.fix1 — 2026-10-28
 
 ### 新增

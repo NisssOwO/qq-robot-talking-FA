@@ -1,6 +1,6 @@
 {
   "name": "qq-robot-talking-fa",
-  "version": "1.0.8.fix1",
+  "version": "1.0.8.fix2",
   "private": true,
   "license": "MIT",
   "description": "独立版 QQ 聊天机器人：自带 QQ 网关与控制面板，角色包与日语语音，双击即可运行。",
@@ -11,7 +11,7 @@
   "scripts": {
     "start": "node src/launch.mjs",
     "panel": "node app/ui.mjs",
-    "build": "node scripts/build-standalone.mjs --out dist/qq-bot",
+    "build": "node scripts/build-standalone.mjs --out dist/qq-bot --keep-state",
     "prompts": "node scripts/sync-standalone-prompts.mjs",
     "smoke": "node scripts/dev-standalone-smoke.mjs",
     "test:quiet": "node scripts/test-quiet-hours.mjs",

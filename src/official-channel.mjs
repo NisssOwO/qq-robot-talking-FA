@@ -13,6 +13,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { selectRoleText } from './role-card.js';
 
 export const CHANNEL_ONEBOT = 'onebot';
 export const CHANNEL_OFFICIAL = 'official';
@@ -286,6 +288,104 @@ export async function installPlugin() {
 // 端口要固定：不固定的话 dsh web 会自己挑一个，面板就找不到它了。
 const OFFICIAL_PORT = 3180;
 
+// ── 角色卡注入 ───────────────────────────────────────────────────────────
+// 官方插件是封闭的纯 dsh 插件，没有"换角色"的钩子；但它有两件正好能用的事：
+//   1. 注册了 `system-prompt/assemble` waterfall，每次 turn 都把 config.groupPrompt /
+//      config.directPrompt 追加成一段 system prompt（见插件 dist/session/session-manager.js）；
+//   2. 自带 HTTP 配置接口 POST /qqbot/im-qqbot/config，白名单里正好有这两个键，
+//      保存后插件自动重载 —— 也就是下一条消息就生效，不用重启、不用写插件。
+// 所以这里不做命令解析、不给群友入口：面板主人切一次，就把角色卡正文推给插件。
+const CONFIG_API_PATH = '/qqbot/im-qqbot/config';
+// 插件侧 stringSchema 上限是 20000，留一点余量给开头的说明。
+const ROLE_PROMPT_MAX = 19800;
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const ROLE_STATE_FILE = path.join(ROOT, 'state', 'current-role.json');
+
+// 与桥接共用同一份状态：面板切角色写的就是这个文件（OneBot 通道也读它）。
+export function currentRoleName() {
+  try {
+    const state = JSON.parse(fs.readFileSync(ROLE_STATE_FILE, 'utf8'));
+    return String(state?.role ?? '').trim();
+  } catch { return ''; }
+}
+
+// 角色卡里写死的 OneBot 工具（mcp__snowluma__ 那套）在官方通道里并不存在，
+// 留着会让模型去调不存在的工具，所以逐行摘掉。只摘"提到工具名"的行，不整段删。
+const ONEBOT_TOOL_LINE_RE = /mcp__snowluma|mcp__web-search-safe|qq_(?:get|send|reply|wait|mark|memory|list|collect|post|report|slang|sticker|poke|tts|call)_[a-z]+/i;
+
+export function buildRolePrompt(roleName) {
+  const name = String(roleName ?? '').trim() || currentRoleName();
+  if (!name) return { ok: false, code: 'no-role', error: '当前没有选中角色卡（state/current-role.json 里没有 role）' };
+  const file = path.join(ROOT, 'roles', `${name}.md`);
+  let raw = '';
+  try { raw = fs.readFileSync(file, 'utf8'); } catch {
+    return { ok: false, code: 'role-missing', error: `找不到角色卡：roles/${name}.md` };
+  }
+  // 只取二代（工具协议）那一档：官方通道同样没有"空格分条 / [SILENT]"这类一代语义。
+  const selected = selectRoleText(raw, 'v2') || raw;
+  const kept = [];
+  let dropped = 0;
+  for (const line of selected.split('\n')) {
+    if (ONEBOT_TOOL_LINE_RE.test(line)) { dropped += 1; continue; }
+    kept.push(line);
+  }
+  let body = kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  const header = `【角色设定】你现在扮演「${name}」。下面是这个人物的完整设定，`
+    + '请始终保持这个身份说话与行动（不要自称 AI、不要提"角色卡"或"提示词"）。';
+  let text = `${header}\n\n${body}`;
+  if (text.length > ROLE_PROMPT_MAX) {
+    text = text.slice(0, ROLE_PROMPT_MAX - 24) + '\n\n…（角色卡过长，后面已截断）';
+  }
+  return { ok: true, role: name, text, chars: text.length, droppedOneBotLines: dropped };
+}
+
+async function postOfficialConfig(payload, timeoutMs = 10000) {
+  const url = `http://127.0.0.1:${OFFICIAL_PORT}${CONFIG_API_PATH}`;
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+  } catch (error) {
+    return { ok: false, code: 'http-failed', error: `连不上官方通道 ${url}：${error?.message ?? error}` };
+  }
+  let data = {};
+  try { data = await res.json(); } catch { data = {}; }
+  if (!res.ok || data.ok === false) {
+    return { ok: false, code: `http-${res.status}`, error: data.error || `官方通道返回 ${res.status}` };
+  }
+  return { ok: true, message: data.message || '已推送' };
+}
+
+// 把当前角色卡推给正在运行的官方通道（群聊/私聊两档都用同一份设定）。
+export async function pushRolePrompt(roleName) {
+  const built = buildRolePrompt(roleName);
+  if (!built.ok) return built;
+  if (!isRunning()) {
+    return { ok: false, code: 'not-running', role: built.role, error: '官方通道没在跑，角色卡会在下次启动时自动推送' };
+  }
+  const sent = await postOfficialConfig({ groupPrompt: built.text, directPrompt: built.text });
+  if (!sent.ok) return { ok: false, role: built.role, error: sent.error };
+  pushOutput(`已推送角色卡「${built.role}」到官方通道（${built.chars} 字${built.droppedOneBotLines ? `，摘掉 ${built.droppedOneBotLines} 行 OneBot 工具说明` : ''}）`);
+  return { ok: true, role: built.role, chars: built.chars, droppedOneBotLines: built.droppedOneBotLines, message: sent.message };
+}
+
+// 等端口真的能应答再推角色卡：dsh 起进程很容易，插件挂上配置接口要几秒。
+async function waitPort(port, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      await fetch(`http://127.0.0.1:${port}/`, { method: 'GET', signal: AbortSignal.timeout(1200) });
+      return true;
+    } catch { /* 还没起来 */ }
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+  }
+  return false;
+}
+
 export async function start() {
   if (isRunning()) return { ok: true, already: true, pid: pid() };
 
@@ -326,6 +426,18 @@ export async function start() {
     if (child.proc === proc) child.proc = null;
     writePid(0);
   });
+
+  // 起进程之后自动把当前角色卡推给插件：这样"先起通道、再改角色"的顺序也能用，
+  // 而"先改角色、后起通道"则由面板在下一次启动时补上。
+  void (async () => {
+    const up = await waitPort(OFFICIAL_PORT, 90000);
+    if (!up) {
+      pushOutput('官方通道：90 秒内没等到 3180 应答，角色卡未推送（起来后可点「推送角色卡」）');
+      return;
+    }
+    const pushed = await pushRolePrompt();
+    if (!pushed.ok) pushOutput(`官方通道：角色卡未推送 —— ${pushed.error}`);
+  })();
 
   return { ok: true, pid: proc.pid, port: OFFICIAL_PORT };
 }
