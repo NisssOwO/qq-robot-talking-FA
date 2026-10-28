@@ -115,6 +115,29 @@
     "longGapMinMs": 5000,
     "longGapMaxMs": 10000
   },
+  "diary": {
+    "enabled": true,
+    "inject": true,
+    "injectDays": 7,
+    "injectMaxChars": 3000,
+    "injectCooldownMinutes": 240,
+    "scope": "key",
+    "fullPerDay": 2,
+    "briefMinMinutes": 30,
+    "firstMinMessages": 8,
+    "blobMaxChars": 6000,
+    "tokenLimit": 60000,
+    "remindRatio": 0.75,
+    "autoRatio": 0.9,
+    "daily": {
+      "enabled": true,
+      "time": "23:20",
+      "timezone": "Asia/Shanghai",
+      "catchUpHours": 3
+    },
+    "memoMax": 20,
+    "extraInstruction": ""
+  },
   "socialV2": {
     "enabled": true,
     "autoReplyCheckMs": 30000,
