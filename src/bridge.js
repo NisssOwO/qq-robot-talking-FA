@@ -753,10 +753,16 @@ function migrateQuietHours(raw) {
   return { ...rest, workday: { windows, ...(weekdays ? { weekdays } : {}) } };
 }
 function loadConfig() {
-  const p = path.join(ROOT, 'config.json');
+  // QQ_BOT_CONFIG 让「同一份代码配两份配置」成为可能（面板用它区分 OneBot/官方通道的
+  // 启动前检查，测试也用它避免碰真实配置）。不设时就是项目根的 config.json。
+  const p = process.env.QQ_BOT_CONFIG || path.join(ROOT, 'config.json');
   const file = readJsonSafe(p, null, true);
   if (!file || typeof file !== 'object' || Array.isArray(file)) throw new Error(`配置格式错误：${p}`);
   const cfg = {
+    // QQ 通道二选一：'onebot'（默认，连 SnowLuma 走自己的 QQ 号）或 'official'
+    // （走腾讯 QQ 开放平台的机器人，由 ~/.dsh/profiles/qqbot 里的 dsh 实例负责收发）。
+    // 注意这里是白名单式组装，file 里的键不抄进来就读不到——加新键必须同步加一行。
+    qqChannel: file.qqChannel === 'official' ? 'official' : 'onebot',
     // 后端选择：'dsh'（默认，连正在运行的 DeepSeek Harness）或 'standalone'（自带 agent 运行时，
     // 不依赖 DSH，见 src/backend/）。两个后端的接口形状一致，切换只改这一行 + 下面 llm 段。
     backend: file.backend === 'standalone' ? 'standalone' : 'dsh',
@@ -1639,6 +1645,9 @@ async function main() {
   // force=true 时忽略 TTL 强制刷新；失败时返回 null（调用方决定是否使用缓存）。
   async function syncStickerLibrary(force = false) {
     if (cfg.socialV2?.sticker?.enabled === false) return null;
+    // 官方通道没有 SnowLuma 客户端：表情库走的是 OneBot 的 fetch_custom_face_detail，
+    // 那边根本没有这个概念，直接返回 null，调用方都是「失败就下次再试」的语义。
+    if (cfg.qqChannel === 'official') return null;
     const rawTtl = Number(cfg.socialV2?.sticker?.syncTtlMs);
     const ttl = Number.isFinite(rawTtl) ? Math.max(0, rawTtl) : 60000;
     const now = Date.now();
@@ -1647,7 +1656,7 @@ async function main() {
     }
     try {
       const count = Math.min(500, Math.max(1, Number(cfg.socialV2?.sticker?.maxListCount) || 100));
-      const response = await bot.request('fetch_custom_face_detail', { count });
+      const response = await activeBot.request('fetch_custom_face_detail', { count });
       if (!response || response.status !== 'ok' || response.retcode !== 0) {
         throw new Error(`fetch_custom_face_detail 失败: ${response?.wording || response?.retcode || 'unknown'}`);
       }
@@ -3497,6 +3506,9 @@ async function main() {
   function startSnowlumaWatch() {
     if (snowlumaWatchStarted) return;
     snowlumaWatchStarted = true;
+    // 官方通道没有 SnowLuma 连接可盯，整块跳过（调用方 launch 侧也已经跳过，
+    // 这里再挡一次：面板里「重启控制台」之类的路径可能绕过 launch 直接进来）。
+    if (cfg.qqChannel === 'official') return;
     // 首次延后一点，避免与启动时的连接/自愈抢时序
     setTimeout(() => { void pollSnowlumaStatus(); }, 5000);
     setInterval(() => { void pollSnowlumaStatus(); }, SNOWLUMA_STATUS_POLL_MS);
@@ -13498,6 +13510,10 @@ ${recentBlock}
   const RECONNECT_COOLDOWN_MAX_MS = Number(cfg.socialV2?.send?.reconnectCooldownMaxMs) || 1_800_000; // 默认 30 分钟
   let reconnectGateTimer = null;
   let reconnectGateActive = false;
+  // 官方通道下这一段（包含 bot）根本不执行，armReconnectGate 也永远不会被调度；
+  // 但它的函数体里引用了 bot，留着裸引用会让「有人手滑调一次」直接 ReferenceError。
+  // 所以用一个可空引用解耦：onebot 时由下面的 if 块赋值。
+  let activeBot = null;
   function armReconnectGate(reason) {
     if (reconnectGateTimer || reconnectGateActive) return; // 已在冷却中，不重置、不叠加
     const wait = RECONNECT_COOLDOWN_MIN_MS
@@ -13506,243 +13522,253 @@ ${recentBlock}
     snowlumaHealth.connected = false;
     log(`⏳ ${reason}，进入约 ${Math.round(wait / 60000)} 分钟冷却，期间不自动重连，结束后再试`);
     // 停掉 SDK 自动重连（closedByUser=true 并清掉它挂起的重连定时器），由下面的定时器接管
-    try { bot.close(1000, 'cooldown'); } catch {}
+    try { activeBot?.close(1000, 'cooldown'); } catch {}
     reconnectGateTimer = setTimeout(() => {
       reconnectGateTimer = null;
       reconnectGateActive = false;
       log('⏳ 冷却结束，尝试重连 SnowLuma…');
-      try { void bot.connect(); } catch (error) { log(`冷却后重连失败：${error?.message ?? error}`); }
+      try { void activeBot?.connect(); } catch (error) { log(`冷却后重连失败：${error?.message ?? error}`); }
     }, wait);
   }
 
-  // QQ 侧（SnowLuma OneBot WebSocket 客户端）
-  const bot = new SnowLumaWebSocketClient({
-    url: cfg.snowluma.wsUrl,
-    accessToken: cfg.snowluma.accessToken || undefined,
-    reconnect: true
-  });
-
-  bot.onPrivateMessage(async (event) => {
-    // 统一按字符串比较：网关可能把 id 序列化成 number/string 混用，
-    // 用 `===` 漏掉自己发的消息会进入正常处理（reserved2 下 AI 会回答自己 / chat 下可能回复循环）。
-    if (String(event?.user_id ?? '') === String(event?.self_id ?? '')) return;
-    try { await handleIncoming('private', event.user_id, event, cfg); } catch (error) { log('处理私聊消息出错:', error?.message ?? error); }
-  });
-  bot.onGroupMessage(async (event) => {
-    if (String(event?.sender?.user_id ?? '') === String(event?.self_id ?? '')
-      || String(event?.user_id ?? '') === String(event?.self_id ?? '')) return;
-    try { await handleIncoming('group', event.group_id, event, cfg); } catch (error) { log('处理群消息出错:', error?.stack ?? error?.message ?? error); }
-  });
-  bot.onNotice('notify', async (event) => {
-    try { await handlePokeNotice(event); } catch (error) { log('处理拍一拍事件出错:', error?.message ?? error); }
-  });
-
-  // ── 上游健康：任何事件包都算「SnowLuma 还活着」，心跳还额外带接收链路健康度 ──
-  // 用 onEvent 挂一个**旁路**订阅（不影响主链路）：
-  //   · 任意事件包 → 记账（证明 SnowLuma 进程 + WS 链路还在）；
-  //   · `meta_event/heartbeat` → 读载荷里的 `status.good`。**这是主信号**：
-  //     SnowLuma 每 30 秒无条件发一次心跳，而 good = online && receiveHealthy 是它对
-  //     「QQ → hook → 我」这条接收链路的自评（实测核对过 1.14.9 运行时源码）。
-  //     免费、及时，且**不依赖较新的运行时**。
-  // 注册失败不影响主链路（不同 SDK 版本的订阅方法可能不同），所以整体包在 try 里。
-  try {
-    bot.onEvent((event) => {
-      const post = event?.post_type;
-      noteUpstreamPacket(post
-        ? `${post}${event.notice_type ? `/${event.notice_type}` : ''}${event.meta_event_type ? `/${event.meta_event_type}` : ''}${event.message_type ? `/${event.message_type}` : ''}`
-        : 'event');
-      if (post === 'meta_event' && event?.meta_event_type === 'heartbeat') {
-        // status 未在 SDK 类型里声明（OneBotMetaEvent 只声明 meta_event_type），
-        // 但 OneBotBaseEvent 是 JsonObject，读取合法。
-        noteReceiveHealth(event.status?.good, 'heartbeat');
-        if (typeof event.status?.online === 'boolean') snowlumaHealth.accountOnline = event.status.online;
-        reportSnowlumaHealth();
-      }
+  // ── QQ 通道二选一 ──────────────────────────────────────────────────────
+  // onebot（默认）：连 SnowLuma，走你自己的 QQ 号。
+  // official：连腾讯官方 Bot（在 ~/.dsh/profiles/qqbot 里跑），本进程不连 SnowLuma，
+  //           仍然提供面板与控制台，角色卡照常由 /api/roles 读写。
+  if (cfg.qqChannel !== 'official') {
+    // QQ 侧（SnowLuma OneBot WebSocket 客户端）
+    const bot = new SnowLumaWebSocketClient({
+      url: cfg.snowluma.wsUrl,
+      accessToken: cfg.snowluma.accessToken || undefined,
+      reconnect: true
     });
-  } catch (error) {
-    log(`（上游事件旁路订阅不可用，健康检测退化：${error?.message ?? error}）`);
-  }
+    // 冷却闸在上面那段函数里定义（它比 if 更外层），用 activeBot 把真实客户端接过去。
+    activeBot = bot;
 
-  // SnowLuma 1.14.17 起新增 bot_status（账号会话边沿）。老运行时不会发这个事件，
-  // 所以它只是加分项：收到就记下来，收不到不影响其它判断。
-  try {
-    bot.onBotStatus((event) => {
-      noteUpstreamPacket('notice/bot_status');
-      const sub = String(event?.sub_type ?? '');
-      snowlumaHealth.accountOnline = sub === 'online';
-      if (sub === 'offline') {
-        log('⚠️ SnowLuma 报告 QQ 账号会话已离线（bot_status: offline）—— QQ 侧掉线或被顶号，'
-          + '在重新登录之前群里不会有任何消息进来。');
-        armReconnectGate('QQ 账号会话离线（bot_status: offline，可能被顶号/风控）');
-      } else if (sub === 'online') {
-        log('SnowLuma 报告 QQ 账号会话已上线（bot_status: online）');
-      }
+    bot.onPrivateMessage(async (event) => {
+      // 统一按字符串比较：网关可能把 id 序列化成 number/string 混用，
+      // 用 `===` 漏掉自己发的消息会进入正常处理（reserved2 下 AI 会回答自己 / chat 下可能回复循环）。
+      if (String(event?.user_id ?? '') === String(event?.self_id ?? '')) return;
+      try { await handleIncoming('private', event.user_id, event, cfg); } catch (error) { log('处理私聊消息出错:', error?.message ?? error); }
     });
-  } catch (error) {
-    log(`（bot_status 订阅不可用（SnowLuma 运行时较旧？）：${error?.message ?? error}）`);
-  }
+    bot.onGroupMessage(async (event) => {
+      if (String(event?.sender?.user_id ?? '') === String(event?.self_id ?? '')
+        || String(event?.user_id ?? '') === String(event?.self_id ?? '')) return;
+      try { await handleIncoming('group', event.group_id, event, cfg); } catch (error) { log('处理群消息出错:', error?.stack ?? error?.message ?? error); }
+    });
+    bot.onNotice('notify', async (event) => {
+      try { await handlePokeNotice(event); } catch (error) { log('处理拍一拍事件出错:', error?.message ?? error); }
+    });
 
-  bot.on('open', () => {
-    // 用实际连接地址（自愈后可能与 config 里的初值不同，别打印过期的那个）
-    const connectedUrl = bot.url ?? cfg.snowluma.wsUrl;
-    snowlumaHealth.connected = true;
-    snowlumaHealth.connectedAt = Date.now();
-    log(`SnowLuma 已连接：${connectedUrl}`);
-    // 「已连接」只说明与 SnowLuma 的 WebSocket 通了，**不说明 QQ 侧收得到消息** ——
-    // 这个区别见 startSnowlumaWatch 的说明。这里顺手把上游健康快照刷一次。
-    void pollSnowlumaStatus();
-    // 读取机器人昵称（用于社交模式"被提到"识别）；重连后也会刷新
-    bot.getLoginInfo().then((login) => {
-      if (login?.nickname) {
-        selfNickname = String(login.nickname).toLowerCase();
-        selfDisplayName = String(login.nickname).trim();
-        log(`机器人昵称: ${login.nickname}`);
-      }
-      if (login?.user_id != null) selfUserId = String(login.user_id);
-    }).catch(() => {});
-    // 连接成功后顺手确认一下 token 是否已跟当前账号对齐；不一致就写回 config.json，
-    // 让 MCP 工具（另一个进程）也能拿到正确的 token。
-    void syncTokenToFile();
-  });
-
-  /**
-   * SnowLuma 恢复连接时自愈 accessToken。
-   *
-   * 为什么需要：SnowLuma 的 OneBot 配置按账号分文件（config/onebot_<QQ号>.json），
-   * 每个账号 token 不同。换账号登录后，config.json 里的旧 token 会 401/连不上，
-   * 而 SDK 的重连会一直用**构造时**那个 token 无限重试 —— 表现为"桥接活着但收发全废"。
-   * 这里在每次重连失败时重新发现当前账号的 token 并热更新，随后自愈。
-   */
-  /**
-   * 应用自愈结果：**HTTP token 与 WS token 是两个不同的值**。
-   *   - cfg.snowluma.accessToken → HTTP 调用（发语音、fetch_ptt_text、get_msg 等）与写回 config.json
-   *   - bot.accessToken          → WebSocket 连接（桥接的主链路，端口 3001）
-   * 只修其中一个的话，桥接仍会以 1006 反复重连（实测踩过）。
-   */
-  async function applyHealedTokens(r) {
-    const httpToken = r.token;
-    const wsToken = r.wsToken || r.token;
-    // ⚠️ 端点跟随是可关的（`snowluma.followDiscoveredEndpoint: false`），默认保持原行为。
-    //
-    // 为什么需要这个开关：自愈会拿 `discoverSnowLumaConnection()` **发现到的** wsUrl
-    // 覆盖掉配置里的值，并写回 config.json。这在"换了 QQ 账号所以端口变了"的主场景下
-    // 是对的（端口确实是 per-account 的），但它**不区分**「用户写的是一个过期值」和
-    // 「用户就是要指向别处」。后果：
-    //   · 想跑第二个实例/指向另一份 SnowLuma 安装（多账号、测试、灰度）时，
-    //     它会静默把端点改回去、连到发现到的那一份 —— 表现为"消息发到了另一个账号/群"，
-    //     或者"我明明指向了 B 却一直在收 A 的消息"，很难归因；
-    //   · 实测踩过：把 wsUrl 指向一个死端口想让它"别连"，启动后仍被改回真实端点并连上。
-    // 关掉之后**只自愈 token**（换账号仍然能恢复），但绝不动 URL、也不写回 URL。
-    const followEndpoint = cfg.snowluma?.followDiscoveredEndpoint !== false;
-    const wsUrl = followEndpoint ? (r.wsUrl || cfg.snowluma.wsUrl) : cfg.snowluma.wsUrl;
-    const wsChanged = bot.accessToken !== wsToken || bot.url !== wsUrl;
-    bot.accessToken = wsToken || undefined;
-    // 端口也是 per-account 的（实测：换账号后 WS 从 3001 之类变到别的端口），
-    // 只换 token 不换 URL 会一直 1006 重连。
-    bot.url = wsUrl;
-    if (wsChanged) log(`🔄 SnowLuma WS 连接已更新：${wsUrl}（token ${String(wsToken).slice(0, 4)}…）`);
-    if (cfg.snowluma.accessToken !== httpToken) {
-      log(`🔄 SnowLuma HTTP token 已更新（来源 ${r.source}）：${String(cfg.snowluma.accessToken).slice(0, 4)}… → ${String(httpToken).slice(0, 4)}…`);
-      cfg.snowluma.accessToken = httpToken;
-    }
-    if (!followEndpoint && r.wsUrl && r.wsUrl !== cfg.snowluma.wsUrl) {
-      log(`   （已按 snowluma.followDiscoveredEndpoint=false 忽略发现到的端点 ${r.wsUrl}，继续用配置值 ${cfg.snowluma.wsUrl}）`);
-    }
-    // 把确认可用的端点写回 config.json：下次启动直接就对了，不用再自愈一遍。
-    // ⚠️ 必须在**改 cfg 之前**算出要写什么，但写文件时对照的是**文件里**的旧值 ——
-    //    这里显式传 wsUrl，且不依赖 cfg 的内存值来判断"是否需要写"。
-    // 关掉端点跟随时不写 URL：否则"我设了别处"这件事会被自愈持久化地抹掉。
-    const previousWsUrl = cfg.snowluma.wsUrl;
-    cfg.snowluma.wsUrl = wsUrl;
+    // ── 上游健康：任何事件包都算「SnowLuma 还活着」，心跳还额外带接收链路健康度 ──
+    // 用 onEvent 挂一个**旁路**订阅（不影响主链路）：
+    //   · 任意事件包 → 记账（证明 SnowLuma 进程 + WS 链路还在）；
+    //   · `meta_event/heartbeat` → 读载荷里的 `status.good`。**这是主信号**：
+    //     SnowLuma 每 30 秒无条件发一次心跳，而 good = online && receiveHealthy 是它对
+    //     「QQ → hook → 我」这条接收链路的自评（实测核对过 1.14.9 运行时源码）。
+    //     免费、及时，且**不依赖较新的运行时**。
+    // 注册失败不影响主链路（不同 SDK 版本的订阅方法可能不同），所以整体包在 try 里。
     try {
-      const w = persistSnowLumaEndpoint(path.join(ROOT, 'config.json'), {
-        accessToken: httpToken,
-        ...(followEndpoint ? { wsUrl, httpUrl: r.baseUrl } : {})
+      bot.onEvent((event) => {
+        const post = event?.post_type;
+        noteUpstreamPacket(post
+          ? `${post}${event.notice_type ? `/${event.notice_type}` : ''}${event.meta_event_type ? `/${event.meta_event_type}` : ''}${event.message_type ? `/${event.message_type}` : ''}`
+          : 'event');
+        if (post === 'meta_event' && event?.meta_event_type === 'heartbeat') {
+          // status 未在 SDK 类型里声明（OneBotMetaEvent 只声明 meta_event_type），
+          // 但 OneBotBaseEvent 是 JsonObject，读取合法。
+          noteReceiveHealth(event.status?.good, 'heartbeat');
+          if (typeof event.status?.online === 'boolean') snowlumaHealth.accountOnline = event.status.online;
+          reportSnowlumaHealth();
+        }
       });
-      if (w.updated) log(`   已写回 config.json：${Object.keys(w.changed).join(' / ')}`);
-      else log('   config.json 端点已是最新，无需改写');
-      if (!followEndpoint && previousWsUrl !== wsUrl) cfg.snowluma.wsUrl = previousWsUrl;
     } catch (error) {
-      log(`   ⚠️ 写回 config.json 失败：${error?.message ?? error}`);
+      log(`（上游事件旁路订阅不可用，健康检测退化：${error?.message ?? error}）`);
     }
-    // 更新了就让 SDK 立刻用新参数重连（否则要等下一轮退避，最长要好几秒）
-    if (wsChanged) {
-      try { bot.close(1000, 'token-refresh'); } catch {}
-      try { bot.connect(); } catch {}
+
+    // SnowLuma 1.14.17 起新增 bot_status（账号会话边沿）。老运行时不会发这个事件，
+    // 所以它只是加分项：收到就记下来，收不到不影响其它判断。
+    try {
+      bot.onBotStatus((event) => {
+        noteUpstreamPacket('notice/bot_status');
+        const sub = String(event?.sub_type ?? '');
+        snowlumaHealth.accountOnline = sub === 'online';
+        if (sub === 'offline') {
+          log('⚠️ SnowLuma 报告 QQ 账号会话已离线（bot_status: offline）—— QQ 侧掉线或被顶号，'
+            + '在重新登录之前群里不会有任何消息进来。');
+          armReconnectGate('QQ 账号会话离线（bot_status: offline，可能被顶号/风控）');
+        } else if (sub === 'online') {
+          log('SnowLuma 报告 QQ 账号会话已上线（bot_status: online）');
+        }
+      });
+    } catch (error) {
+      log(`（bot_status 订阅不可用（SnowLuma 运行时较旧？）：${error?.message ?? error}）`);
     }
-    return wsChanged;
-  }
 
-  /** 只写文件、不动物件（连接已成功时用）。 */
-  async function syncTokenToFile() {
-    try {
-      const r = persistToken(path.join(ROOT, 'config.json'), cfg.snowluma.accessToken ?? '');
-      // 只记「已写回」，不打印 token 片段：日志会被贴进 issue / 截图，
-      // 前 4 个字符同样是凭据的一部分（CWE-532，见 PR #13）。
-      if (r.updated) log('🔄 已把当前 token 写回 config.json');
-    } catch {}
-  }
+    bot.on('open', () => {
+      // 用实际连接地址（自愈后可能与 config 里的初值不同，别打印过期的那个）
+      const connectedUrl = bot.url ?? cfg.snowluma.wsUrl;
+      snowlumaHealth.connected = true;
+      snowlumaHealth.connectedAt = Date.now();
+      log(`SnowLuma 已连接：${connectedUrl}`);
+      // 「已连接」只说明与 SnowLuma 的 WebSocket 通了，**不说明 QQ 侧收得到消息** ——
+      // 这个区别见 startSnowlumaWatch 的说明。这里顺手把上游健康快照刷一次。
+      void pollSnowlumaStatus();
+      // 读取机器人昵称（用于社交模式"被提到"识别）；重连后也会刷新
+      bot.getLoginInfo().then((login) => {
+        if (login?.nickname) {
+          selfNickname = String(login.nickname).toLowerCase();
+          selfDisplayName = String(login.nickname).trim();
+          log(`机器人昵称: ${login.nickname}`);
+        }
+        if (login?.user_id != null) selfUserId = String(login.user_id);
+      }).catch(() => {});
+      // 连接成功后顺手确认一下 token 是否已跟当前账号对齐；不一致就写回 config.json，
+      // 让 MCP 工具（另一个进程）也能拿到正确的 token。
+      void syncTokenToFile();
+    });
 
-  let tokenHealAt = 0;
-  async function healTokenIfStale(reason) {
-    const now = Date.now();
-    if (now - tokenHealAt < 10000) return;   // 节流：close 事件会连续触发
-    tokenHealAt = now;
-    try {
-      const r = await discoverSnowLumaConnection({ cfg, timeoutMs: 4000 });
-      if (!r.ok) {
-        log(`⚠️ token 自愈失败（${reason}）：${r.error}`);
-        return;
+    /**
+     * SnowLuma 恢复连接时自愈 accessToken。
+     *
+     * 为什么需要：SnowLuma 的 OneBot 配置按账号分文件（config/onebot_<QQ号>.json），
+     * 每个账号 token 不同。换账号登录后，config.json 里的旧 token 会 401/连不上，
+     * 而 SDK 的重连会一直用**构造时**那个 token 无限重试 —— 表现为"桥接活着但收发全废"。
+     * 这里在每次重连失败时重新发现当前账号的 token 并热更新，随后自愈。
+     */
+    /**
+     * 应用自愈结果：**HTTP token 与 WS token 是两个不同的值**。
+     *   - cfg.snowluma.accessToken → HTTP 调用（发语音、fetch_ptt_text、get_msg 等）与写回 config.json
+     *   - bot.accessToken          → WebSocket 连接（桥接的主链路，端口 3001）
+     * 只修其中一个的话，桥接仍会以 1006 反复重连（实测踩过）。
+     */
+    async function applyHealedTokens(r) {
+      const httpToken = r.token;
+      const wsToken = r.wsToken || r.token;
+      // ⚠️ 端点跟随是可关的（`snowluma.followDiscoveredEndpoint: false`），默认保持原行为。
+      //
+      // 为什么需要这个开关：自愈会拿 `discoverSnowLumaConnection()` **发现到的** wsUrl
+      // 覆盖掉配置里的值，并写回 config.json。这在"换了 QQ 账号所以端口变了"的主场景下
+      // 是对的（端口确实是 per-account 的），但它**不区分**「用户写的是一个过期值」和
+      // 「用户就是要指向别处」。后果：
+      //   · 想跑第二个实例/指向另一份 SnowLuma 安装（多账号、测试、灰度）时，
+      //     它会静默把端点改回去、连到发现到的那一份 —— 表现为"消息发到了另一个账号/群"，
+      //     或者"我明明指向了 B 却一直在收 A 的消息"，很难归因；
+      //   · 实测踩过：把 wsUrl 指向一个死端口想让它"别连"，启动后仍被改回真实端点并连上。
+      // 关掉之后**只自愈 token**（换账号仍然能恢复），但绝不动 URL、也不写回 URL。
+      const followEndpoint = cfg.snowluma?.followDiscoveredEndpoint !== false;
+      const wsUrl = followEndpoint ? (r.wsUrl || cfg.snowluma.wsUrl) : cfg.snowluma.wsUrl;
+      const wsChanged = bot.accessToken !== wsToken || bot.url !== wsUrl;
+      bot.accessToken = wsToken || undefined;
+      // 端口也是 per-account 的（实测：换账号后 WS 从 3001 之类变到别的端口），
+      // 只换 token 不换 URL 会一直 1006 重连。
+      bot.url = wsUrl;
+      if (wsChanged) log(`🔄 SnowLuma WS 连接已更新：${wsUrl}（token ${String(wsToken).slice(0, 4)}…）`);
+      if (cfg.snowluma.accessToken !== httpToken) {
+        log(`🔄 SnowLuma HTTP token 已更新（来源 ${r.source}）：${String(cfg.snowluma.accessToken).slice(0, 4)}… → ${String(httpToken).slice(0, 4)}…`);
+        cfg.snowluma.accessToken = httpToken;
       }
-      await applyHealedTokens(r);
-      log(`   自愈完成：账号 ${r.self?.user_id ?? '?'}（${reason}）`);
-    } catch (error) {
-      log(`⚠️ token 自愈异常：${error?.message ?? error}`);
+      if (!followEndpoint && r.wsUrl && r.wsUrl !== cfg.snowluma.wsUrl) {
+        log(`   （已按 snowluma.followDiscoveredEndpoint=false 忽略发现到的端点 ${r.wsUrl}，继续用配置值 ${cfg.snowluma.wsUrl}）`);
+      }
+      // 把确认可用的端点写回 config.json：下次启动直接就对了，不用再自愈一遍。
+      // ⚠️ 必须在**改 cfg 之前**算出要写什么，但写文件时对照的是**文件里**的旧值 ——
+      //    这里显式传 wsUrl，且不依赖 cfg 的内存值来判断"是否需要写"。
+      // 关掉端点跟随时不写 URL：否则"我设了别处"这件事会被自愈持久化地抹掉。
+      const previousWsUrl = cfg.snowluma.wsUrl;
+      cfg.snowluma.wsUrl = wsUrl;
+      try {
+        const w = persistSnowLumaEndpoint(path.join(ROOT, 'config.json'), {
+          accessToken: httpToken,
+          ...(followEndpoint ? { wsUrl, httpUrl: r.baseUrl } : {})
+        });
+        if (w.updated) log(`   已写回 config.json：${Object.keys(w.changed).join(' / ')}`);
+        else log('   config.json 端点已是最新，无需改写');
+        if (!followEndpoint && previousWsUrl !== wsUrl) cfg.snowluma.wsUrl = previousWsUrl;
+      } catch (error) {
+        log(`   ⚠️ 写回 config.json 失败：${error?.message ?? error}`);
+      }
+      // 更新了就让 SDK 立刻用新参数重连（否则要等下一轮退避，最长要好几秒）
+      if (wsChanged) {
+        try { bot.close(1000, 'token-refresh'); } catch {}
+        try { bot.connect(); } catch {}
+      }
+      return wsChanged;
     }
+
+    /** 只写文件、不动物件（连接已成功时用）。 */
+    async function syncTokenToFile() {
+      try {
+        const r = persistToken(path.join(ROOT, 'config.json'), cfg.snowluma.accessToken ?? '');
+        // 只记「已写回」，不打印 token 片段：日志会被贴进 issue / 截图，
+        // 前 4 个字符同样是凭据的一部分（CWE-532，见 PR #13）。
+        if (r.updated) log('🔄 已把当前 token 写回 config.json');
+      } catch {}
+    }
+
+    let tokenHealAt = 0;
+    async function healTokenIfStale(reason) {
+      const now = Date.now();
+      if (now - tokenHealAt < 10000) return;   // 节流：close 事件会连续触发
+      tokenHealAt = now;
+      try {
+        const r = await discoverSnowLumaConnection({ cfg, timeoutMs: 4000 });
+        if (!r.ok) {
+          log(`⚠️ token 自愈失败（${reason}）：${r.error}`);
+          return;
+        }
+        await applyHealedTokens(r);
+        log(`   自愈完成：账号 ${r.self?.user_id ?? '?'}（${reason}）`);
+      } catch (error) {
+        log(`⚠️ token 自愈异常：${error?.message ?? error}`);
+      }
+    }
+
+    bot.on('close', (info) => {
+      const wasConnected = snowlumaHealth.connected;
+      snowlumaHealth.connected = false;
+      log(`SnowLuma 连接断开（code=${info?.code ?? '?'}），重连中…`);
+      // 连不上时最常见的原因就是换了 QQ 账号 → token 变了；顺手自愈。
+      // 注意 1006 在**每次启动**都可能出现一次：HTTP token 与 WS token 是两个不同的值，
+      // config.json 里存的是前者，WS 需要用自愈发现的那个（详见 bot.connect() 处的说明）。
+      void healTokenIfStale(`close code=${info?.code ?? '?'}`);
+      // 之前已连上才叫真实掉线（吃 10~30 分钟冷却）；启动期 close(1006) 走 SDK 秒级自愈
+      if (wasConnected) armReconnectGate(`连接断开（close code=${info?.code ?? '?'}）`);
+    });
+    bot.on('error', (error) => {
+      // SDK 在 WS 升级被拒（401 / 建连失败）时可能**只 emit error、不 emit close**，
+      // 于是挂在 close 上的 token 自愈永远不会触发 —— 表现为「桥接活着但收发全废」，
+      // 用户只能靠手工改 token 绕过去（issue #19）。这里同样尝试一次（内部有 10s 节流）。
+      const detail = error && typeof error === 'object'
+        ? [error.code, error.message, error.reason, error.type].filter(Boolean).join(' | ') || JSON.stringify(error)
+        : String(error ?? '');
+      log(`SnowLuma 错误：${detail || '(无详情)'}`);
+      void healTokenIfStale(`error ${detail}`.trim().slice(0, 200));
+      // error 不 emit close 时兜底：之前已连上且出错 → 同样上冷却闸（否则可能反复 401 空转）
+      if (snowlumaHealth.connected) armReconnectGate('连接错误（未触发 close）');
+    });
+
+    // SnowLuma 尚未就绪时不阻塞桥接启动：SDK 自带后台重连，DSH 侧照常连接。
+    bot.connect().catch((error) => {
+      // 说明为什么"第一次连不上"在这里几乎是**必然**的，避免用户把它当成故障：
+      // SnowLuma 的 **HTTP token（默认 3000）与 WS token（默认 3001）是两个不同的值**
+      // （实测：同一个账号，两者不同；config.json 只能存一个，存的是 HTTP 那个）。
+      // 所以 WS 首次连接通常会被拒 → close(1006) → 触发 token 自愈（重新发现 WS token）
+      // → 重连成功后才是「SnowLuma 已连接」。若 homeDir 没配/被移动/读不到 SnowLuma 的
+      // config/onebot_<QQ>.json，自愈就无从下手，这时才会一直连不上 —— 那种情况请查
+      // 日志里的「token 自愈失败」与 config.json 的 snowluma.homeDir。
+      log(`SnowLuma 首次连接未成功（将在后台自动重连并尝试自愈 WS token）: ${error?.message ?? error}`);
+    });
   }
 
-  bot.on('close', (info) => {
-    const wasConnected = snowlumaHealth.connected;
-    snowlumaHealth.connected = false;
-    log(`SnowLuma 连接断开（code=${info?.code ?? '?'}），重连中…`);
-    // 连不上时最常见的原因就是换了 QQ 账号 → token 变了；顺手自愈。
-    // 注意 1006 在**每次启动**都可能出现一次：HTTP token 与 WS token 是两个不同的值，
-    // config.json 里存的是前者，WS 需要用自愈发现的那个（详见 bot.connect() 处的说明）。
-    void healTokenIfStale(`close code=${info?.code ?? '?'}`);
-    // 之前已连上才叫真实掉线（吃 10~30 分钟冷却）；启动期 close(1006) 走 SDK 秒级自愈
-    if (wasConnected) armReconnectGate(`连接断开（close code=${info?.code ?? '?'}）`);
-  });
-  bot.on('error', (error) => {
-    // SDK 在 WS 升级被拒（401 / 建连失败）时可能**只 emit error、不 emit close**，
-    // 于是挂在 close 上的 token 自愈永远不会触发 —— 表现为「桥接活着但收发全废」，
-    // 用户只能靠手工改 token 绕过去（issue #19）。这里同样尝试一次（内部有 10s 节流）。
-    const detail = error && typeof error === 'object'
-      ? [error.code, error.message, error.reason, error.type].filter(Boolean).join(' | ') || JSON.stringify(error)
-      : String(error ?? '');
-    log(`SnowLuma 错误：${detail || '(无详情)'}`);
-    void healTokenIfStale(`error ${detail}`.trim().slice(0, 200));
-    // error 不 emit close 时兜底：之前已连上且出错 → 同样上冷却闸（否则可能反复 401 空转）
-    if (snowlumaHealth.connected) armReconnectGate('连接错误（未触发 close）');
-  });
-
-  // SnowLuma 尚未就绪时不阻塞桥接启动：SDK 自带后台重连，DSH 侧照常连接。
-  bot.connect().catch((error) => {
-    // 说明为什么"第一次连不上"在这里几乎是**必然**的，避免用户把它当成故障：
-    // SnowLuma 的 **HTTP token（默认 3000）与 WS token（默认 3001）是两个不同的值**
-    // （实测：同一个账号，两者不同；config.json 只能存一个，存的是 HTTP 那个）。
-    // 所以 WS 首次连接通常会被拒 → close(1006) → 触发 token 自愈（重新发现 WS token）
-    // → 重连成功后才是「SnowLuma 已连接」。若 homeDir 没配/被移动/读不到 SnowLuma 的
-    // config/onebot_<QQ>.json，自愈就无从下手，这时才会一直连不上 —— 那种情况请查
-    // 日志里的「token 自愈失败」与 config.json 的 snowluma.homeDir。
-    log(`SnowLuma 首次连接未成功（将在后台自动重连并尝试自愈 WS token）: ${error?.message ?? error}`);
-  });
   log('桥接已启动。按 Ctrl+C 退出。');
   // 预热表情库：启动时同步一次 QQ 收藏表情，失败不阻塞（AI 首次调用工具时还会再试）。
   if (cfg.socialV2?.sticker?.enabled !== false) {
     syncStickerLibrary(true).catch((error) => log('启动预热表情库失败:', error?.message ?? error));
   }
   startDshWatch();
-  startSnowlumaWatch();
+  // 官方通道下没有 SnowLuma 客户端，上游健康探测/看门狗都没有对象可探，直接跳过。
+  if (cfg.qqChannel !== 'official') startSnowlumaWatch();
   // 静默时段：每分钟对一次状态；进入静默就清掉所有自主定时器，退出后再排回去。
   startQuietTicker();
   startNightStickerTicker();

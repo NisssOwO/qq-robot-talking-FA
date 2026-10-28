@@ -267,8 +267,13 @@ async function main() {
     console.log('[launch] 配置已就绪，启动机器人。');
   }
 
-  await ensureSnowLuma();
-  process.on('exit', maybeAutoStopSnowLuma);
+  // QQ 通道二选一：official 时不拉 SnowLuma（走腾讯官方 Bot），桥接只提供面板与控制台。
+  if (cfg.qqChannel === 'official') {
+    console.log('[launch] QQ 通道 = official：跳过 SnowLuma，桥接只启动面板与控制台。');
+  } else {
+    await ensureSnowLuma();
+    process.on('exit', maybeAutoStopSnowLuma);
+  }
   if (process.env.QQ_BOT_LAUNCH_DRYRUN === '1') {
     console.log('[launch] DRYRUN：前置检查完成，不启动桥接。');
     return;

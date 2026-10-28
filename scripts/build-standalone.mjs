@@ -21,6 +21,20 @@ const OUT = path.resolve(ROOT, outArg);
 const withNode = !argv.includes('--no-node');
 
 // 安全闸：只允许删 dist/ 下的目标或显式给了 --out 的目录，避免手滑删掉项目。
+// 打包会把目标目录整个删掉重来，所以「使用者已填好的 config.json」必须在动手之前
+// 抢救出来，最后再合并回去。否则不管后面怎么写，文件早就没了——这正是 1.0.8 那次
+// 打包把 dist/qq-bot 里模型 Key、群号白名单、QQ 路径全冲掉的原因。
+let preservedConfig = null;
+const preservedConfigPath = path.join(OUT, 'config.json');
+if (fs.existsSync(preservedConfigPath)) {
+  try {
+    preservedConfig = JSON.parse(fs.readFileSync(preservedConfigPath, 'utf8'));
+    console.log(`发现已有配置，打包结束后会合并回去（不会覆盖你填的值）：${preservedConfigPath}`);
+  } catch {
+    console.warn(`⚠️ 已有 config.json 解析失败，按模板重建：${preservedConfigPath}`);
+  }
+}
+
 if (fs.existsSync(OUT)) {
   const underDist = OUT.startsWith(path.join(ROOT, 'dist') + path.sep);
   if (!underDist && !argv.includes('--out')) {
@@ -59,6 +73,10 @@ function copyDir(from, to, { skip = [], filter = null } = {}) {
   return n;
 }
 
+// 目标目录里原本就有一份 config.json（使用者自己填过 Key/群号）时置 true。
+// 一旦为 true，净化环节不许再改它的内容——那是别人的真实配置，不是发布模板。
+let configPreserved = false;
+
 // 发布内容净化：把作者本机特有的「行为偏好」从输出里去掉，让发布包保持通用
 // （不把某个人的私人设定当成所有使用者的默认）。只改 OUT 里的副本，绝不修改本机源码。
 function sanitizeReleaseOutput() {
@@ -96,8 +114,10 @@ function sanitizeReleaseOutput() {
   }
 
   // 4) 配置模板里的催睡示例文案清空（保留字段，不写具体句子）
+  //    ⚠️ 只在「这份 config.json 是本次刚生成的模板」时做。已有配置是使用者的真实
+  //    数据，清掉他的自定义文案属于破坏，不是净化。
   const cfgPath = path.join(OUT, 'config.json');
-  if (fs.existsSync(cfgPath)) {
+  if (!configPreserved && fs.existsSync(cfgPath)) {
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     const ns = cfg?.socialV2?.nightSticker;
     if (ns && (ns.text?.ja || ns.text?.zh)) {
@@ -218,6 +238,10 @@ if (withNode) {
 }
 
 // 5) 配置模板：backend=standalone，apiKey 留空
+//    ⚠️ 目标目录里已经有 config.json 时**绝不覆盖**——那是使用者填好的真实配置
+//       （模型 Key、接口地址、群号白名单、QQ 路径…），打包一次就冲掉等于毁数据。
+//       做法：新模板打底，旧配置的值覆盖上去。这样新版本新增的字段会自动补进来，
+//       而使用者填过的值一个不动；数组整体替换，不做拼接（否则群号会越并越多）。
 const example = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.example.json'), 'utf8'));
 const standaloneCfg = {
   ...example,
@@ -230,8 +254,30 @@ const standaloneCfg = {
     model: 'deepseek-chat'
   }
 };
-fs.writeFileSync(path.join(OUT, 'config.json'), `${JSON.stringify(standaloneCfg, null, 2)}\n`, 'utf8');
-report.push('config.json: 模板（backend=standalone，llm.apiKey 留空）');
+
+const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+// 以 base 为骨架，把 user 里有的值盖上去；对象递归，数组/标量整体替换。
+function mergeKeepUser(base, user) {
+  if (!isPlainObject(user)) return user;
+  const out = isPlainObject(base) ? { ...base } : {};
+  for (const [key, value] of Object.entries(user)) {
+    out[key] = isPlainObject(value) ? mergeKeepUser(out[key], value) : value;
+  }
+  return out;
+}
+
+const cfgPath = path.join(OUT, 'config.json');
+const existing = preservedConfig ?? (fs.existsSync(cfgPath) ? JSON.parse(fs.readFileSync(cfgPath, 'utf8')) : null);
+if (existing) {
+  const merged = mergeKeepUser(standaloneCfg, existing);
+  fs.writeFileSync(cfgPath, `${JSON.stringify(merged, null, 2)}\n`, 'utf8');
+  configPreserved = true;
+  const added = Object.keys(standaloneCfg).filter((k) => !(k in existing));
+  report.push(`config.json: 已存在，保留原配置（新增顶层字段：${added.length ? added.join('/') : '无'}）`);
+} else {
+  fs.writeFileSync(cfgPath, `${JSON.stringify(standaloneCfg, null, 2)}\n`, 'utf8');
+  report.push('config.json: 模板（backend=standalone，llm.apiKey 留空）');
+}
 
 // 5b) 净化：作者本机的个性化行为规则不进发布内容（只改输出，不动源码）
 step('净化个性化内容', () => sanitizeReleaseOutput());

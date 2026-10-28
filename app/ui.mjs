@@ -17,6 +17,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import * as official from '../src/official-channel.mjs';
+import { isQQNTPath, readQQNTRoot, pickQQNTPath } from '../src/qq-detect.mjs';
 
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(APP_DIR, '..');
@@ -179,55 +181,35 @@ async function listQQProcesses() {
   return list;
 }
 
-// 注册表里 QQ 的 DisplayIcon 形如 `D:\QQ\QQ.exe,0`，去掉末尾的图标序号才是路径。
-function cleanDisplayIcon(raw) {
-  return String(raw ?? '').trim().replace(/^"|"$/g, '').replace(/,\s*-?\d+$/, '').trim();
-}
-
-// 注册表有时候给的是卸载器（Uninstall.exe）或图标文件，不是主程序。
-// 一律落回「同一目录下的 QQ.exe」；实在没有才退回原值，交给上层再判存在性。
-function normalizeQQExe(raw) {
-  const exe = cleanDisplayIcon(raw);
-  if (!exe) return '';
-  if (/[\\/]qq\.exe$/i.test(exe) && fs.existsSync(exe)) return exe;
-  const sibling = path.join(path.dirname(exe), 'QQ.exe');
-  if (fs.existsSync(sibling)) return sibling;
-  return exe;
-}
-
-function readQQFromRegistry() {
-  return new Promise((resolve) => {
-    const script = `foreach ($k in @('HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QQ','HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QQ','HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QQ')) { if (Test-Path $k) { $p = Get-ItemProperty $k -ErrorAction SilentlyContinue; if ($p.DisplayIcon) { $p.DisplayIcon; break }; if ($p.UninstallString) { $p.UninstallString; break } } }`;
-    execFile('powershell', ['-NoProfile', '-Command', script], { windowsHide: true }, (error, stdout) => {
-      if (error) return resolve('');
-      resolve(normalizeQQExe(String(stdout ?? '').split(/\r?\n/)[0]));
-    });
-  });
-}
-
-// 探测顺序：正在跑的 QQ → 配置里存的 → 注册表。用户自定义安装（比如 D:\QQ）只能靠前两者。
+// ── 只认 QQNT ───────────────────────────────────────────────
+// 同一台机器上常常并存两套 QQ：老版（9.7 那批 C++ 版，目录形如 E:\QQ\Bin）和
+// 新版 QQNT（9.9+）。两者主程序都叫 QQ.exe，但网关只能注入 QQNT——老版被认成
+// 目标，注入器就对着一个不兼容的进程干等，表现为「网关起不来」。
+// 判定逻辑放在 src/qq-detect.mjs 里（纯函数好单测），这里只负责取进程列表。
+//
+// 顺序：注册表 QQNT 目录下正在跑的进程 → 配置里存的（必须是 QQNT）→ 该目录的
+// QQ.exe。老版 QQ 永远不参与，宁可返回空让用户手动选。
 async function detectQQPath(cfg, procs) {
+  const ntRoot = await readQQNTRoot();
   const list = procs ?? (await listQQProcesses());
-  // 只认真正的主程序：QQ 还会起 QQProtect 之类的进程，路径判错就会去注入错的目标。
-  const running = list.find((p) => p.path && /[\\/]QQ\.exe$/i.test(p.path) && fs.existsSync(p.path));
-  if (running) return running.path;
   const configured = String(cfg?.qq?.path ?? '').trim();
-  if (configured && fs.existsSync(configured)) return configured;
-  const fromReg = await readQQFromRegistry();
-  if (fromReg && fs.existsSync(fromReg)) return fromReg;
-  return '';
+  return pickQQNTPath({ ntRoot, procs: list, configured });
 }
 
 async function startQQ() {
   const cfg = readConfig();
   const before = await listQQProcesses();
-  if (before.length) return { ok: true, already: true, count: before.length };
+  // 只把 QQNT 算成「已经开着」：老版 QQ 在跑不算数，否则这里直接 return，
+  // 用户等半天也等不到网关能注入的那个进程。
+  const ntRoot = await readQQNTRoot();
+  const ntRunning = before.filter((p) => p.path && isQQNTPath(p.path, ntRoot));
+  if (ntRunning.length) return { ok: true, already: true, count: ntRunning.length };
   const exe = await detectQQPath(cfg, before);
   if (!exe) {
     return {
       ok: false,
       code: 'qq-missing',
-      error: '没有找到 QQ.exe：请在「QQ 启动」里填好 QQ 的路径'
+      error: '没有找到 QQNT 版 QQ.exe：请在「QQ 启动」里手动选 QQNT 目录下的 QQ.exe（老版 QQ 不支持注入）'
     };
   }
   if (!fs.existsSync(exe)) {
@@ -1267,6 +1249,9 @@ async function status() {
   ]);
   const botAlive = children.bot && !children.bot.killed ? true : await probePort(Number(cfg?.consolePort ?? 3100), 500);
   const qqProcs = await listQQProcesses();
+  const ntRoot = await readQQNTRoot();
+  const qqNTProcs = qqProcs.filter((p) => p.path && isQQNTPath(p.path, ntRoot));
+  const qqLegacyProcs = qqProcs.filter((p) => p.path && !isQQNTPath(p.path, ntRoot));
   const qqConfigured = String(cfg?.qq?.path ?? '').trim();
   // 网关装没装、目录、pid 都按当前选择取，别把 SnowLuma 的状态套到 NapCat 上。
   const gwInstalled = kind === 'snowluma' ? fs.existsSync(path.join(SNOWLUMA_DIR, 'index.mjs')) : napcatInstalled();
@@ -1295,14 +1280,17 @@ async function status() {
     gatewayHint,
     bot: { running: !!botAlive, pid: children.bot?.pid ?? null },
     // QQ 本体：网关靠注入它工作，所以面板要能把「装在哪、开没开」摆出来。
+    // 只统计 QQNT 的进程：老版 QQ 开着不代表能注入，混进来会让这一栏误报「在线」。
     qq: {
-      running: qqProcs.length > 0,
-      count: qqProcs.length,
+      running: qqNTProcs.length > 0,
+      count: qqNTProcs.length,
       path: qqConfigured,
       configured: !!qqConfigured,
       autoLaunch: cfg?.qq?.autoLaunch !== false,
       // 正在跑的那个 QQ 的路径，比配置里存的更可信（用户可能重装到别处）
-      runningPath: qqProcs.find((p) => p.path)?.path ?? ''
+      runningPath: qqNTProcs.find((p) => p.path)?.path ?? '',
+      // 机器上还躺着老版 QQ 时提示一句，省得用户以为面板瞎了
+      legacyRunning: qqLegacyProcs.length > 0
     },
     config: cfg
       ? {
@@ -1901,6 +1889,62 @@ const server = http.createServer(async (req, res) => {
         fs.writeFileSync(file, JSON.stringify(pack, null, 2) + '\n', 'utf8');
         return json(res, 200, { ok: true, pack, file: path.relative(ROOT, file) });
       }
+
+      // ── 官方通道（腾讯 QQ 开放平台）───────────────────────────────────
+      // 这组接口存在的原因：官方通道要装插件、填 AppID/Secret、起一个 dsh 子进程，
+      // 原来全在命令行里做（改 yaml、设环境变量、开终端）。这里一次性搬进面板。
+      if (sub === 'official/status') {
+        return json(res, 200, official.status(CONFIG_PATH));
+      }
+      if (req.method === 'POST' && sub === 'official/install') {
+        log('官方通道：开始安装插件');
+        try {
+          const r = await official.installPlugin();
+          log(r.ok ? `官方通道：插件安装完成 ${r.version}` : `官方通道：插件安装失败 ${r.error}`);
+          return json(res, 200, { ok: r.ok, error: r.error, installed: r.installed, version: r.version });
+        } catch (error) {
+          log(`官方通道：插件安装异常 ${error?.message ?? error}`);
+          return json(res, 500, { ok: false, error: error?.message ?? String(error) });
+        }
+      }
+      if (req.method === 'POST' && sub === 'official/config') {
+        let input = {};
+        try { input = JSON.parse((await readBody(req)) || '{}'); } catch { input = {}; }
+        try {
+          const cred = official.saveCredentials({ appId: input.appId, appSecret: input.appSecret });
+          // 日志里只记 AppID，密钥绝不落日志。
+          log(`官方通道：凭据已保存（AppID ${cred.appId}）`);
+          return json(res, 200, { ok: true, appId: cred.appId, hasSecret: cred.hasSecret });
+        } catch (error) {
+          return json(res, 400, { ok: false, error: error?.message ?? String(error) });
+        }
+      }
+      if (req.method === 'POST' && sub === 'official/start') {
+        log('官方通道：启动');
+        try { return json(res, 200, await official.start()); }
+        catch (error) { return json(res, 500, { ok: false, error: error?.message ?? String(error) }); }
+      }
+      if (req.method === 'POST' && sub === 'official/stop') {
+        log('官方通道：停止');
+        try { return json(res, 200, await official.stop()); }
+        catch (error) { return json(res, 500, { ok: false, error: error?.message ?? String(error) }); }
+      }
+      if (req.method === 'POST' && sub === 'official/restart') {
+        log('官方通道：重启');
+        try { return json(res, 200, await official.restart()); }
+        catch (error) { return json(res, 500, { ok: false, error: error?.message ?? String(error) }); }
+      }
+      // ── 通道二选一 ────────────────────────────────────────────────────
+      // 写 qqChannel 之后必须重启桥接才生效（launch.mjs 和 bridge.js 都是启动时读配置）。
+      // 故意不自动重启：用户可能只是想先改好、下次开机再切。
+      if (req.method === 'POST' && sub === 'channel') {
+        let input = {};
+        try { input = JSON.parse((await readBody(req)) || '{}'); } catch { input = {}; }
+        const want = official.setChannel(CONFIG_PATH, String(input.channel ?? ''));
+        log(`QQ 通道已切换为 ${want}（重启机器人后生效）`);
+        return json(res, 200, { ok: true, channel: want, needRestart: true });
+      }
+
       // ── 会话历史：自动整理未必合心意，这里让人自己看、自己删 ──────────
       if (sub === 'reveal' && req.method === 'POST') {
         const body = JSON.parse((await readBody(req)) || '{}');

@@ -518,6 +518,7 @@ const NAV = [
     { id: 'model',    label: '模型与密钥', self: true, svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.4M12 18.6V21M3 12h2.4M18.6 12H21M5.6 5.6l1.7 1.7M16.7 16.7l1.7 1.7M18.4 5.6l-1.7 1.7M7.3 16.7l-1.7 1.7"/></svg>' },
     { id: 'allow',    label: '对话范围', self: true, svg: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3.5 19c0-3 2.5-4.8 5.5-4.8s5.5 1.8 5.5 4.8"/><path d="M16 14.4c2.4 0 4.5 1.3 4.5 3.6"/></svg>' },
     { id: 'qq',       label: 'QQ 启动', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M8 5.5v13l10-6.5z"/></svg>' },
+    { id: 'official', label: '官方通道', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M12 8v5M9.6 10.6L12 13l2.4-2.4"/></svg>' },
     { id: 'close',    label: '关窗行为', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M12 4v8"/><path d="M7.5 7a7 7 0 109 0"/></svg>' },
     { id: 'usage',    label: '令牌用量', svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9M9.5 10h4a1.8 1.8 0 010 3.6h-3"/></svg>' , self: true },
     { id: 'access',   label: '访问与安全', svg: '<svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>' },
@@ -554,7 +555,233 @@ function head(eyebrow, title, desc) {
   return `<div class="head"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p class="sub">${desc}</p></div></div>`;
 }
 
-// ── 自建页：启动与状态 ───────────────────────────────────
+// ── 自建页：官方通道（腾讯 QQ 开放平台）─────────────────────
+// 这一页要解决的事：原来装插件、填 AppID/Secret、起 dsh 进程全在命令行做，
+// 用户得改 yaml、设环境变量、开终端。现在全在这一个页面里完成。
+const officialView = document.createElement('section');
+officialView.className = 'view pad';
+officialView.dataset.view = 'official';
+officialView.hidden = true;
+$('main').appendChild(officialView);
+
+let officialState = null;
+let officialPoll = null;
+
+async function loadOfficial() {
+  officialView.innerHTML = head('QQ 通道', '官方通道', '走腾讯 QQ 开放平台的机器人身份，由腾讯侧负责登录态与合规；OneBot 通道走你自己的 QQ 号。两条通道二选一。');
+  const shell = document.createElement('div');
+  shell.className = 'card';
+  shell.style.margin = '0 16px 16px';
+  shell.innerHTML = '<div class="card-head"><div class="card-title">正在读取状态…</div></div>';
+  officialView.appendChild(shell);
+  await refreshOfficial();
+}
+
+async function refreshOfficial() {
+  let st;
+  try {
+    st = await (await fetch('/panel/api/official/status', { cache: 'no-store' })).json();
+  } catch (e) {
+    officialView.querySelector('.card').innerHTML = `<div class="card-head"><div class="card-title">读不到状态</div></div><pre>${esc(e.message)}</pre>`;
+    return;
+  }
+  officialState = st;
+  renderOfficial(st);
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function renderOfficial(st) {
+  const card = officialView.querySelector('.card');
+  if (!card) return;
+  const isOfficial = st.channel === 'official';
+  const dot = st.running ? 'var(--ok, #3fb950)' : 'var(--muted)';
+
+  const problems = [];
+  if (!st.cliExists) problems.push(`找不到 dsh：<code>${esc(st.cliPath)}</code>`);
+  if (!st.installed) problems.push('插件还没装');
+  if (!st.appId) problems.push('AppID 还没填');
+  if (!st.hasSecret) problems.push('AppSecret 还没填');
+
+  card.innerHTML = `
+    <div class="card-head">
+      <div class="card-title">
+        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${dot}"></span>
+        官方通道
+      </div>
+      <div class="spacer"></div>
+      <button class="btn mini" id="of-refresh">刷新</button>
+    </div>
+
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+      <div style="font-size:13px;margin-bottom:10px;color:var(--muted)">当前使用哪条通道（切换后在「启动与状态」里重启机器人生效）</div>
+      <div style="display:flex;gap:10px">
+        <button class="btn ${isOfficial ? '' : 'primary'}" data-chan="onebot">OneBot（自己的 QQ 号）</button>
+        <button class="btn ${isOfficial ? 'primary' : ''}" data-chan="official">官方通道（腾讯机器人）</button>
+      </div>
+      ${isOfficial ? '<div style="margin-top:10px;font-size:12px;color:var(--muted)">已切到官方通道：机器人启动时不再拉起 SnowLuma，桥接只提供面板与控制台。</div>' : ''}
+    </div>
+
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+      <div style="font-size:13px;margin-bottom:8px">一、安装插件
+        <span style="color:var(--muted);font-weight:400">${st.installed ? `已安装 ${esc(st.version)}` : '未安装'}</span>
+      </div>
+      <button class="btn" id="of-install">${st.installed ? '重新安装 / 升级' : '安装到 qqbot profile'}</button>
+      <div class="hint" style="margin-top:8px;font-size:11.5px;color:var(--muted)">
+        装到 <code>${esc(st.profileDir)}</code>，和桌面版那个 dsh 分开，互不影响。
+      </div>
+    </div>
+
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+      <div style="font-size:13px;margin-bottom:8px">二、填资料（在 QQ 开放平台「开发设置」里拿）</div>
+      <div class="field" style="padding:0 0 8px">
+        <label>AppID</label>
+        <input id="of-appid" placeholder="纯数字，例如 102xxxxxx" value="${esc(st.appId)}">
+      </div>
+      <div class="field" style="padding:0 0 10px">
+        <label>AppSecret</label>
+        <input id="of-secret" type="password" placeholder="${st.hasSecret ? '已保存，留空表示不修改' : '粘贴 AppSecret'}">
+      </div>
+      <button class="btn primary" id="of-save">保存</button>
+    </div>
+
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border)">
+      <div style="font-size:13px;margin-bottom:8px">三、运行
+        <span style="color:var(--muted);font-weight:400">${st.running ? `运行中 · pid ${st.pid}` : '未运行'}</span>
+      </div>
+      <div style="display:flex;gap:10px">
+        <button class="btn" id="of-start" ${st.running ? 'disabled' : ''}>启动</button>
+        <button class="btn" id="of-restart">重启</button>
+        <button class="btn danger" id="of-stop" ${st.running ? '' : 'disabled'}>停止</button>
+        ${st.running ? `<button class="btn mini" onclick="window.open('http://127.0.0.1:${st.port}','_blank')">打开 dsh 界面</button>` : ''}
+      </div>
+      ${problems.length ? `<div style="margin-top:10px;font-size:12px;color:var(--muted)">还差：${problems.join('、')}</div>` : ''}
+    </div>
+
+    <div style="padding:14px 16px">
+      <div style="font-size:13px;margin-bottom:8px">四、切角色（群友只能看，切完下一条消息生效）</div>
+      <div id="of-roles" style="font-size:12.5px;color:var(--muted)">读取中…</div>
+    </div>
+
+    <div class="log" id="of-log">${st.output.length ? st.output.map((l) => `<div>${esc(l)}</div>`).join('') : '<div style="opacity:.6">（还没有输出）</div>'}</div>
+  `;
+
+  card.querySelector('#of-refresh').onclick = () => void refreshOfficial();
+  card.querySelector('#of-install').onclick = (e) => void officialAction(e.target, '/panel/api/official/install', '安装中…');
+  card.querySelector('#of-save').onclick = () => void saveOfficialCreds();
+  card.querySelector('#of-start').onclick = (e) => void officialAction(e.target, '/panel/api/official/start', '启动中…');
+  card.querySelector('#of-restart').onclick = (e) => void officialAction(e.target, '/panel/api/official/restart', '重启中…');
+  card.querySelector('#of-stop').onclick = (e) => void officialAction(e.target, '/panel/api/official/stop', '停止中…');
+  for (const b of card.querySelectorAll('[data-chan]')) {
+    b.onclick = () => void switchChannel(b.dataset.chan);
+  }
+  void loadOfficialRoles();
+  startOfficialPoll();
+}
+
+function startOfficialPoll() {
+  if (officialPoll) return;
+  // 只在“官方通道”页可见时轮询：dsh 子进程的输出要实时看到，但不需要一直拉。
+  officialPoll = setInterval(() => {
+    if (active !== 'official' || !officialState?.running) return;
+    void (async () => {
+      try {
+        const st = await (await fetch('/panel/api/official/status', { cache: 'no-store' })).json();
+        const box = officialView.querySelector('#of-log');
+        if (box) box.innerHTML = st.output.length ? st.output.map((l) => `<div>${esc(l)}</div>`).join('') : '<div style="opacity:.6">（还没有输出）</div>';
+        if (box) box.scrollTop = box.scrollHeight;
+      } catch { /* 轮询失败不打断界面 */ }
+    })();
+  }, 2500);
+}
+
+async function officialAction(btn, url, busyText) {
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = busyText;
+  try {
+    const r = await (await fetch(url, { method: 'POST' })).json();
+    if (!r.ok && r.error) alert(r.error);
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    btn.textContent = old;
+    btn.disabled = false;
+    await refreshOfficial();
+  }
+}
+
+async function saveOfficialCreds() {
+  const appId = officialView.querySelector('#of-appid').value.trim();
+  const appSecret = officialView.querySelector('#of-secret').value.trim();
+  if (!appId) { alert('AppID 不能为空'); return; }
+  const btn = officialView.querySelector('#of-save');
+  btn.disabled = true;
+  btn.textContent = '保存中…';
+  try {
+    const r = await (await fetch('/panel/api/official/config', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ appId, appSecret })
+    })).json();
+    if (!r.ok) alert(r.error || '保存失败');
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '保存';
+    await refreshOfficial();
+  }
+}
+
+async function switchChannel(channel) {
+  const label = channel === 'official' ? '官方通道' : 'OneBot';
+  if (!confirm(`切换到${label}？\n\n切换后需要重启机器人（在「启动与状态」里），否则不生效。`)) return;
+  try {
+    await fetch('/panel/api/channel', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channel })
+    });
+  } catch (e) {
+    alert(e.message);
+  }
+  await refreshOfficial();
+}
+
+// 角色列表复用控制台已有的 /api/roles，切角色也走同一个接口，
+// 这样两条通道共用一份 roles/ 与 state/current-role.json，不用各存一份。
+async function loadOfficialRoles() {
+  const box = officialView.querySelector('#of-roles');
+  if (!box) return;
+  try {
+    const r = await (await fetch('/api/roles', { cache: 'no-store' })).json();
+    const names = Array.isArray(r.roles) ? r.roles : (Array.isArray(r) ? r : []);
+    const list = names.map((n) => (typeof n === 'string' ? n : n.name)).filter(Boolean);
+    const cur = String(r.current ?? r.currentRole ?? '');
+    if (!list.length) { box.textContent = 'roles/ 目录里还没有角色卡。'; return; }
+    box.innerHTML = `<div class="field" style="padding:0"><label>当前角色</label>
+      <select id="of-rolesel">${list.map((n) => `<option value="${esc(n)}" ${n === cur ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></div>
+      <button class="btn primary" id="of-rolesave" style="margin-top:10px">切换</button>
+      <div class="hint" style="margin-top:8px">面板主人专用；群友那边只能看到结果，没有切换入口。</div>`;
+    box.querySelector('#of-rolesave').onclick = async () => {
+      const role = box.querySelector('#of-rolesel').value;
+      try {
+        const res = await (await fetch('/api/role', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ role })
+        })).json();
+        if (res.ok === false) alert(res.error || '切换失败');
+        else alert(`已切到「${role}」，下一条消息生效。`);
+      } catch (e) { alert(e.message); }
+    };
+  } catch (e) {
+    box.textContent = `读不到角色列表：${e.message}`;
+  }
+}
 const statusView = document.createElement('section');
 statusView.className = 'view pad';
 statusView.dataset.view = 'status';
@@ -2054,6 +2281,7 @@ function go(id) {
     if (id === 'qzone') void loadQzone();
     if (id === 'sessionhist') void loadSessions();
   if (id === 'qq') { void loadQQ(); }
+    if (id === 'official') { void loadOfficial(); }
     if (id === 'update') { void loadVersion(false); }
     if (id === 'stickers') void loadStickers(false);
   if (id === 'start') void loadStart();
@@ -3502,7 +3730,9 @@ function applyQQ(q) {
   if ($('qq-now-sub')) {
     $('qq-now-sub').textContent = running
       ? '网关会自动注入它；如果还没上线，等一会儿或看网关日志。'
-      : (q.configured ? '启动面板时会自动拉起；也可以点右边按钮现在启动。' : '先填下面的路径，或点「自动探测」。');
+      : (q.legacyRunning
+        ? '机器上跑着老版 QQ（不支持注入）：请退出它，再启动 QQNT 版。'
+        : (q.configured ? '启动面板时会自动拉起；也可以点右边按钮现在启动。' : '先填下面的路径，或点「自动探测」。'));
   }
   const facts = $('qq-now-facts');
   if (facts) {
@@ -3546,8 +3776,9 @@ async function loadQQ() {
     const hint = $('qq-path-hint');
     if (!hint) return;
     if (s.qq && s.qq.configured) hint.textContent = '已保存：' + s.qq.path;
-    else if (s.qq && s.qq.runningPath) hint.textContent = '检测到正在运行的 QQ：' + s.qq.runningPath + '（点「自动探测」填进去再保存）';
-    else hint.textContent = '还没保存路径；自动探测会先看正在跑的 QQ，再查注册表。';
+    else if (s.qq && s.qq.runningPath) hint.textContent = '检测到正在运行的 QQNT：' + s.qq.runningPath + '（点「自动探测」填进去再保存）';
+    else if (s.qq && s.qq.legacyRunning) hint.textContent = '只认 QQNT 版 QQ：老版 QQ 开着也不算，请装/开 QQNT 版。';
+    else hint.textContent = '还没保存路径；自动探测只认 QQNT 版 QQ，老版（9.7 那批）不会被选。';
   } catch (e) { /* 忽略 */ }
 }
 if ($('gw-start')) {
