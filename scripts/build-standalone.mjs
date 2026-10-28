@@ -81,7 +81,24 @@ if (fs.existsSync(OUT)) {
   if (!argv.includes('--force')) {
     console.log(`目标已存在，先清空：${OUT}`);
   }
-  fs.rmSync(OUT, { recursive: true, force: true });
+  try {
+    fs.rmSync(OUT, { recursive: true, force: true });
+  } catch (error) {
+    // 目录本身被占用（资源管理器开着、杀软扫描中、上一轮进程还没退干净）时，
+    // 整棵删会直接抛 EPERM/Permission denied 并把打包停在半路；退化成"就地清空"，
+    // 逐个顶层项删，删不掉的留着（反正随后会被同名新文件覆盖）。
+    if (error?.code !== 'EPERM' && error?.code !== 'EBUSY' && error?.code !== 'EACCES') throw error;
+    console.warn(`目录被占用，改为就地清空：${error.code}`);
+    let kept = 0;
+    for (const name of fs.readdirSync(OUT)) {
+      try {
+        fs.rmSync(path.join(OUT, name), { recursive: true, force: true });
+      } catch {
+        kept++;
+      }
+    }
+    if (kept) console.warn(`有 ${kept} 个顶层项删不掉，会由随后的同名文件覆盖。`);
+  }
 }
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -415,12 +432,15 @@ const CSC_CANDIDATES = [
 const csc = CSC_CANDIDATES.find((p) => fs.existsSync(p));
 const launcherSrc = path.join(ROOT, 'app', 'launcher.cs');
 const launcherExe = path.join(OUT, 'QQ聊天机器人.exe');
+// 程序图标：app/icon.ico 存在就编进 exe（托盘、任务栏、Alt+Tab、资源管理器全都跟它走）
+const launcherIcon = path.join(ROOT, 'app', 'icon.ico');
 if (csc && fs.existsSync(launcherSrc)) {
   try {
     execFileSync(csc, [
       '-nologo', '-target:winexe', '-platform:x64', '-codepage:65001',
       `-out:${launcherExe}`,
       `-win32manifest:${path.join(ROOT, 'app', 'app.manifest')}`,
+      ...(fs.existsSync(launcherIcon) ? [`-win32icon:${launcherIcon}`] : []),
       '-reference:System.Windows.Forms.dll',
       '-reference:System.Drawing.dll',
       '-reference:System.Web.Extensions.dll',

@@ -1788,6 +1788,17 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       return res.end(html);
     }
+    // 站点图标：直接用 app/icon.ico（浏览器标签页 / 收藏夹 / 桌面快捷方式都吃这个）
+    if (req.method === 'GET' && (url.pathname === '/favicon.ico' || url.pathname === '/icon.ico')) {
+      const iconPath = path.join(APP_DIR, 'icon.ico');
+      if (!fs.existsSync(iconPath)) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+        return res.end('no icon');
+      }
+      const icon = fs.readFileSync(iconPath);
+      res.writeHead(200, { 'content-type': 'image/x-icon', 'content-length': icon.length, 'cache-control': 'public, max-age=86400' });
+      return res.end(icon);
+    }
     // 桥接控制台本体：同源提供，外层只借用它的主内容区，导航由外层统一给。
     if (req.method === 'GET' && /^\/console(\/(index\.html)?)?$/.test(url.pathname)) {
       if (!fs.existsSync(CONSOLE_PATH)) {

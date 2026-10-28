@@ -1934,7 +1934,8 @@ button:active:not(:disabled) {
         <label style="flex:1">试探等待窗口（分）</label><input type="number" id="sIdleWait" min="1" style="width:80px">
       </div>
       <div class="row">
-        <label style="flex:1">普通消息沉默概率</label><input type="number" id="sSkipProb" step="0.05" min="0" max="1" style="width:80px">
+        <label style="flex:1">普通消息沉默概率（一代）</label><input type="number" id="sSkipProb" step="0.05" min="0" max="1" style="width:80px">
+        <span class="meta" style="flex:2">二代模式请用上面「防霸屏开关 → 沉默概率」；这里只在二代没设过概率时作为回落值。</span>
       </div>
       <div class="row">
         <label style="flex:1">抬杠时退让概率</label><input type="number" id="sSurrenderProb" step="0.05" min="0" max="1" style="width:80px">
@@ -2170,6 +2171,21 @@ button:active:not(:disabled) {
         <label style="flex:1">回复检查延迟（秒）</label><input type="number" id="v2AutoReplyCheckSec" min="1" style="width:90px">
         <span class="meta" style="flex:2">回复检查是 AI 发消息后回来检查是否有人回复的延迟。</span>
       </div>
+
+      </div></details>
+<!-- 防霸屏开关：随机沉默 / 连发冷静（对应 socialV2.silenceEnabled / cooldownEnabled，各自独立可关） -->
+<details class="settings-group"><summary>防霸屏开关（随机沉默 / 连发冷静）</summary><div class="settings-content">
+      <div class="row">
+        <label style="flex:1">启用随机沉默</label><input type="checkbox" id="v2SilenceEnabled" style="width:auto">
+        <label style="flex:1">沉默概率</label><input type="number" id="v2SilenceProb" step="0.05" min="0" max="1" style="width:80px">
+        <span class="meta" style="flex:2">普通闲聊（概率唤醒或关键词唤醒）按这个概率干脆不回：消息留在未读，等下次真开口时一起看。@、叫名字、提问、私聊一律照常回。</span>
+      </div>
+      <div class="row">
+        <label style="flex:1">启用连发冷静</label><input type="checkbox" id="v2CooldownEnabled" style="width:auto">
+        <label style="flex:1">连发多少轮后冷静</label><input type="number" id="v2ActiveRunRounds" min="1" max="50" style="width:80px">
+        <span class="meta" style="flex:2">同一个群连着回这么多轮就强制冷静，时长取「一代仿真 → 群聊活跃超时主动退出」里设置的活跃时长（当前 20~40 分钟随机）；冷静期内 @、叫名字、提问、私聊仍会回。</span>
+      </div>
+      <div class="meta">两个开关各自独立：关掉随机沉默不影响连发冷静，反之亦然。</div>
 
       </div></details>
 <!-- 主动机会参数已移到「运行总览 → 主动搭话」卡片，这里不再重复设置，避免两个入口改同一批参数。 -->
@@ -3622,6 +3638,10 @@ async function loadV2Config() {
     document.getElementById('v2WaitDefaultQuietMs').value = wt.defaultQuietMs ?? 8000;
     document.getElementById('v2MinQuietAfterNewMs').value = wt.minQuietAfterNewMs ?? 10000;
     document.getElementById('v2AutoReplyCheckSec').value = Math.round((c.autoReplyCheckMs || 30000) / 1000);
+    document.getElementById('v2SilenceEnabled').checked = c.silenceEnabled !== false;
+    document.getElementById('v2SilenceProb').value = c.silenceProbability ?? 0.1;
+    document.getElementById('v2CooldownEnabled').checked = c.cooldownEnabled !== false;
+    document.getElementById('v2ActiveRunRounds').value = c.activeRunMaxRounds ?? 6;
     const pa = c.proactive || {};
     // 主动机会参数的 UI 已迁到运行总览卡片（pc* 元素由 loadProactiveCard 负责）。
     const stk = c.sticker || {};
@@ -3653,6 +3673,10 @@ async function saveV2Config() {
     agentPreset: document.getElementById('v2AgentPreset').value.trim(),
     provideRecommendations: document.getElementById('v2ProvideRecommendations').checked,
     autoReplyCheckMs: Math.round(Number(document.getElementById('v2AutoReplyCheckSec').value) || 30) * 1000,
+    silenceEnabled: document.getElementById('v2SilenceEnabled').checked,
+    silenceProbability: Math.min(1, Math.max(0, Number(document.getElementById('v2SilenceProb').value) || 0)),
+    cooldownEnabled: document.getElementById('v2CooldownEnabled').checked,
+    activeRunMaxRounds: Math.min(50, Math.max(1, Math.round(Number(document.getElementById('v2ActiveRunRounds').value) || 6))),
     tools,
     wake: {
       defaultMode: document.getElementById('v2WakeDefaultMode').value,

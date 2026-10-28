@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>QQ 聊天机器人控制台</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
 <style>
 :root {
   --bg: #12151c;
@@ -512,7 +513,8 @@ const NAV = [
       { id: 'qzone', label: 'QQ空间', svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 13h8M8 9h5"/></svg>', self: true },
     { id: 'social-v2', label: '二代仿真', svg: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3.5 19c0-3 2.5-4.8 5.5-4.8s5.5 1.8 5.5 4.8"/><path d="M16 14.4c2.4 0 4.5 1.3 4.5 3.6"/></svg>' },
     { id: 'social-v1', label: '一代仿真', svg: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="14" rx="2"/><path d="M8 20h8M9 9h6M9 13h4"/></svg>' },
-    { id: 'slang',    label: '黑话词库', svg: '<svg viewBox="0 0 24 24"><path d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"/></svg>' }
+    { id: 'slang',    label: '黑话词库', svg: '<svg viewBox="0 0 24 24"><path d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"/></svg>' },
+    { id: 'diary',    label: '记忆日记', self: true, svg: '<svg viewBox="0 0 24 24"><path d="M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>' }
   ]},
   { group: '管理', items: [
     { id: 'model',    label: '模型与密钥', self: true, svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.4M12 18.6V21M3 12h2.4M18.6 12H21M5.6 5.6l1.7 1.7M16.7 16.7l1.7 1.7M18.4 5.6l-1.7 1.7M7.3 16.7l-1.7 1.7"/></svg>' },
@@ -2290,6 +2292,341 @@ rolepackView.innerHTML = head('ROLE PACK', '角色包', '音色、唤醒别名�
 </div>`;
 $('main').appendChild(rolepackView);
 
+// ── 自建页：记忆日记 ─────────────────────────────────────
+// 日记本身是桥接写的（按天一个文件，开新上下文时自动注入最近几天），
+// 这一页只做三件事：看她还记得什么、手动让她写一篇、调阈值。
+const diaryView = document.createElement('section');
+diaryView.className = 'view';
+diaryView.dataset.view = 'diary';
+diaryView.style.maxWidth = '1040px';
+diaryView.style.margin = '0 auto';
+diaryView.innerHTML = head('MEMORY DIARY', '记忆日记', '她把自己记得的事按天写成日记。开新上下文时，最近几天的日记会先回到她脑子里，所以换会话也不用从头介绍自己。') + `
+<div class="grid">
+  <section class="card span2">
+    <div class="card-head">
+      <div class="card-title">现在的情况</div>
+      <div class="hint" id="dy-base">—</div>
+    </div>
+    <div class="formgrid">
+      <div class="field">
+        <label>看哪个会话</label>
+        <select id="dy-key"><option value="">载入中…</option></select>
+        <div class="hint">群聊与私聊各是一本日记（也可以设成所有会话共用一本）。</div>
+      </div>
+      <div class="field">
+        <label>这次上下文用了多少</label>
+        <div style="height:10px;border-radius:6px;background:var(--line,#2a2a2a);overflow:hidden;margin:6px 0">
+          <div id="dy-bar" style="height:100%;width:0;background:#4ea1ff;transition:width .3s"></div>
+        </div>
+        <div class="hint" id="dy-tokens">—</div>
+      </div>
+      <div class="field">
+        <label>还没写进日记的新消息</label>
+        <div class="hint" id="dy-pending" style="font-size:15px;color:var(--fg)">—</div>
+        <div class="hint" id="dy-last">上次写：—</div>
+      </div>
+    </div>
+    <div class="field-actions">
+      <button class="btn primary" id="dy-write-full" type="button">写一篇完整日记</button>
+      <button class="btn" id="dy-write-brief" type="button">只写简记</button>
+      <button class="btn" id="dy-write-life" type="button">写她的日常</button>
+      <span class="hint" id="dy-write-hint">写的时候不会打扰群里，写完这里能看到。</span>
+    </div>
+  </section>
+
+  <section class="card span2">
+    <div class="card-head">
+      <div class="card-title">日记本</div>
+      <div class="hint" id="dy-count">—</div>
+    </div>
+    <div id="dy-days" style="padding:2px 18px 10px">
+      <div class="hint">选一个会话后显示。</div>
+    </div>
+  </section>
+
+  <section class="card span2">
+    <div class="card-head"><div class="card-title">怎么记、什么时候记</div></div>
+    <label class="opt">
+      <div><div class="opt-name">启用记忆日记</div><div class="opt-sub">关掉后不再自动写，也不再往上下文里注入。</div></div>
+      <span class="switch"><input type="checkbox" id="dy-enabled"></span>
+    </label>
+    <label class="opt">
+      <div><div class="opt-name">新会话先回想最近几天的日记</div><div class="opt-sub">只在开新上下文时注入一次，不是每轮都塞。</div></div>
+      <span class="switch"><input type="checkbox" id="dy-inject"></span>
+    </label>
+    <div class="formgrid">
+      <div class="field">
+        <label>回想几天</label>
+        <input type="number" id="dy-days" min="1" max="30" step="1" placeholder="7">
+        <div class="hint">越久越像「记得很久以前的事」，也越占上下文。</div>
+      </div>
+      <div class="field">
+        <label>最多塞多少字</label>
+        <input type="number" id="dy-maxchars" min="300" max="20000" step="100" placeholder="3000">
+        <div class="hint">超了就从最老的开始丢。</div>
+      </div>
+      <div class="field">
+        <label>上下文上限（token）</label>
+        <input type="number" id="dy-tokenlimit" min="8000" max="1000000" step="1000" placeholder="60000">
+        <div class="hint">按你模型的实际窗口填，偏小会写得勤一点。</div>
+      </div>
+      <div class="field">
+        <label>提醒 / 自动写的阈值</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="number" id="dy-remind" min="30" max="99" step="5" placeholder="75" style="width:100%">
+          <span style="color:var(--muted)">%</span>
+          <input type="number" id="dy-auto" min="40" max="100" step="5" placeholder="90" style="width:100%">
+          <span style="color:var(--muted)">%</span>
+        </div>
+        <div class="hint">前一个是「该写日记了」的提醒线，后一个到了就直接写。</div>
+      </div>
+      <div class="field">
+        <label>每天最多几篇完整日记</label>
+        <input type="number" id="dy-fullperday" min="0" max="6" step="1" placeholder="2">
+        <div class="hint">简记不算额度；0 = 不再自动写完整篇。</div>
+      </div>
+      <div class="field">
+        <label>两篇之间至少隔多久</label>
+        <input type="number" id="dy-briefmin" min="5" max="600" step="5" placeholder="30">
+        <div class="hint">单位分钟。太勤会像记流水账。</div>
+      </div>
+      <div class="field">
+        <label>第一次写完整日记前，至少攒几条消息</label>
+        <input type="number" id="dy-firstmin" min="1" max="200" step="1" placeholder="8">
+        <div class="hint">刚开始用的时候别为一句话写一整篇。</div>
+      </div>
+      <div class="field">
+        <label>同一段对话里，隔多久才再回想一次</label>
+        <input type="number" id="dy-cooldown" min="0" max="168" step="1" placeholder="4">
+        <div class="hint">单位小时。0 = 每次开新上下文都回想（换了新会话也会回想）。</div>
+      </div>
+      <div class="field">
+        <label>日记归属</label>
+        <select id="dy-scope">
+          <option value="key">每个会话各一本</option>
+          <option value="global">所有会话共用一本</option>
+        </select>
+        <div class="hint">共用一本 = 群聊和私聊记的是同一个人。</div>
+      </div>
+      <div class="field">
+        <label>每天定时写一次</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span class="switch"><input type="checkbox" id="dy-daily"></span>
+          <input type="time" id="dy-dailytime" style="width:110px">
+        </div>
+        <div class="hint">当天有新消息才写；她已经写过就不重复。</div>
+      </div>
+    </div>
+    <div class="field">
+      <label>额外叮嘱（每次写日记都会带上）</label>
+      <textarea id="dy-extra" placeholder="例如：别写成清单，多留一点当时的心情。" style="min-height:70px"></textarea>
+    </div>
+    <div class="field-actions">
+      <button class="btn primary" id="dy-save" type="button">保存设置</button>
+      <span class="hint">改完立即生效，不用重启。</span>
+    </div>
+  </section>
+</div>`;
+$('main').appendChild(diaryView);
+
+let dyLoaded = false;
+let dyCurrentKey = '';
+
+async function dapi(path, options) {
+  const res = await fetch('/api/' + path, options);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+
+function dyAgo(ts) {
+  if (!ts) return '还没写过';
+  const m = Math.round((Date.now() - ts) / 60000);
+  if (m < 1) return '刚刚';
+  if (m < 60) return m + ' 分钟前';
+  const h = Math.round(m / 60);
+  if (h < 24) return h + ' 小时前';
+  return Math.round(h / 24) + ' 天前';
+}
+
+async function loadDiary(force) {
+  if (dyLoaded && !force) return;
+  dyLoaded = true;
+  try {
+    const data = await dapi('diary/status');
+    const c = data.cfg || {};
+    $('dy-base').textContent = data.base ? '存在 ' + data.base : '';
+    // 会话下拉
+    const sel = $('dy-key');
+    const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+    const prev = dyCurrentKey || sel.value;
+    sel.innerHTML = sessions.length
+      ? sessions.map((s) => `<option value="${s.key}">${s.label || s.key}${s.pending ? ' · ' + s.pending + ' 条新消息' : ''}</option>`).join('')
+      : '<option value="">还没有会话</option>';
+    if (prev && sessions.some((s) => s.key === prev)) sel.value = prev;
+    dyCurrentKey = sel.value;
+    renderDiarySession(sessions.find((s) => s.key === dyCurrentKey));
+    // 配置回填
+    $('dy-enabled').checked = c.enabled !== false;
+    $('dy-inject').checked = c.inject !== false;
+    $('dy-days').value = c.injectDays ?? 7;
+    $('dy-maxchars').value = c.injectMaxChars ?? 3000;
+    $('dy-tokenlimit').value = c.tokenLimit ?? 60000;
+    $('dy-remind').value = Math.round((c.remindRatio ?? 0.75) * 100);
+    $('dy-auto').value = Math.round((c.autoRatio ?? 0.9) * 100);
+    $('dy-fullperday').value = c.fullPerDay ?? 2;
+    $('dy-briefmin').value = c.briefMinMinutes ?? 30;
+    $('dy-firstmin').value = c.firstMinMessages ?? 8;
+    $('dy-cooldown').value = Math.round((c.injectCooldownMinutes ?? 240) / 60);
+    $('dy-scope').value = c.scope === 'global' ? 'global' : 'key';
+    $('dy-daily').checked = c.daily?.enabled !== false;
+    $('dy-dailytime').value = c.daily?.time || '23:20';
+    $('dy-extra').value = c.extraInstruction || '';
+    await loadDiaryList();
+  } catch (error) {
+    $('dy-base').textContent = '读不到：' + error.message;
+  }
+}
+
+function renderDiarySession(s) {
+  if (!s) {
+    $('dy-bar').style.width = '0';
+    $('dy-tokens').textContent = '还没有会话可以看。';
+    $('dy-pending').textContent = '—';
+    $('dy-last').textContent = '上次写：—';
+    return;
+  }
+  const pct = Math.max(0, Math.min(100, Number(s.pct) || 0));
+  $('dy-bar').style.width = pct + '%';
+  $('dy-bar').style.background = pct >= 90 ? '#e5534b' : pct >= 75 ? '#d29922' : '#4ea1ff';
+  $('dy-tokens').textContent = `约 ${s.tokens} / ${s.limit} token（${pct}%）`;
+  $('dy-pending').textContent = s.pending ? s.pending + ' 条' : '没有（都是写过的）';
+  $('dy-last').textContent = '上次写：' + dyAgo(s.lastWriteAt);
+}
+
+async function loadDiaryList() {
+  const key = dyCurrentKey;
+  const box = $('dy-days');
+  if (!key) { box.innerHTML = '<div class="hint">还没有会话。</div>'; $('dy-count').textContent = ''; return; }
+  try {
+    const data = await dapi('diary/list?key=' + encodeURIComponent(key));
+    const days = Array.isArray(data.days) ? data.days.filter((d) => d.entries.length) : [];
+    const total = days.reduce((n, d) => n + d.entries.length, 0);
+    $('dy-count').textContent = total ? `${total} 篇 · ${days.length} 天` : '还是空的';
+    if (!days.length) {
+      box.innerHTML = '<div class="hint">这本还是空的。点上面「写一篇完整日记」试试。</div>';
+      return;
+    }
+    box.innerHTML = days.map((d) => `
+      <details class="dy-day" data-day="${d.day}">
+        <summary style="cursor:pointer;padding:8px 0;display:flex;gap:10px;align-items:center">
+          <b style="min-width:96px">${d.day}</b>
+          <span class="hint" style="flex:1">${d.entries.map((e) => (e.mode === 'full' ? '完整' : e.mode === 'life' ? '随笔' : '简记') + ' ' + String(e.at).slice(11, 16)).join(' · ')}</span>
+          <span class="hint">${d.entries.reduce((n, e) => n + (e.chars || 0), 0)} 字</span>
+        </summary>
+        <div class="dy-body" style="padding:4px 0 12px;white-space:pre-wrap;font-size:13px;line-height:1.75;color:var(--muted)">
+          <div class="hint">展开后加载…</div>
+        </div>
+        <div class="field-actions" style="padding-bottom:10px">
+          <button class="btn mini dy-del" data-day="${d.day}" type="button">删掉这一天</button>
+        </div>
+      </details>`).join('');
+    for (const d of box.querySelectorAll('details.dy-day')) {
+      d.addEventListener('toggle', async () => {
+        if (!d.open || d.dataset.loaded) return;
+        d.dataset.loaded = '1';
+        const body = d.querySelector('.dy-body');
+        try {
+          const r = await dapi('diary/read?key=' + encodeURIComponent(key) + '&day=' + d.dataset.day);
+          body.textContent = r.text || '';
+        } catch (error) {
+          body.textContent = '读不出来：' + error.message;
+        }
+      });
+    }
+    for (const b of box.querySelectorAll('.dy-del')) {
+      b.addEventListener('click', async () => {
+        if (!confirm('删掉 ' + b.dataset.day + ' 这一天的日记？删了没法恢复。')) return;
+        try {
+          await dapi('diary/delete', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ key, day: b.dataset.day })
+          });
+          toast('已删掉 ' + b.dataset.day);
+          await loadDiary(true);
+        } catch (error) { toast(error.message, true); }
+      });
+    }
+  } catch (error) {
+    box.innerHTML = '<div class="hint">读不出来：' + error.message + '</div>';
+  }
+}
+
+async function diaryWrite(mode) {
+  const key = dyCurrentKey;
+  if (!key) { toast('先选一个会话', true); return; }
+  const label = mode === 'full' ? '完整日记' : mode === 'life' ? '她的日常' : '简记';
+  $('dy-write-hint').textContent = '正在写' + label + '…（要调用一次模型，大概十几秒）';
+  try {
+    const r = await dapi('diary/write', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key, mode })
+    });
+    $('dy-write-hint').textContent = r.summary ? '写好了：' + r.summary : '写好了。';
+    toast(label + '写好了');
+    await loadDiary(true);
+  } catch (error) {
+    $('dy-write-hint').textContent = '没写成：' + error.message;
+    toast(error.message, true);
+  }
+}
+
+async function saveDiaryCfg() {
+  // 冷却时间用小时填，留空按默认 4 小时；填 0 才是「每次都回想」。
+  const cooldownRaw = String($('dy-cooldown').value ?? '').trim();
+  const cooldownMinutes = cooldownRaw === '' ? 240 : Math.max(0, Number(cooldownRaw) || 0) * 60;
+  const cfgNext = {
+    enabled: $('dy-enabled').checked,
+    inject: $('dy-inject').checked,
+    injectDays: Number($('dy-days').value) || 7,
+    injectMaxChars: Number($('dy-maxchars').value) || 3000,
+    tokenLimit: Number($('dy-tokenlimit').value) || 60000,
+    remindRatio: (Number($('dy-remind').value) || 75) / 100,
+    autoRatio: (Number($('dy-auto').value) || 90) / 100,
+    fullPerDay: Number($('dy-fullperday').value) || 0,
+    briefMinMinutes: Number($('dy-briefmin').value) || 30,
+    firstMinMessages: Number($('dy-firstmin').value) || 8,
+    injectCooldownMinutes: cooldownMinutes,
+    scope: $('dy-scope').value === 'global' ? 'global' : 'key',
+    extraInstruction: $('dy-extra').value.trim(),
+    daily: { enabled: $('dy-daily').checked, time: $('dy-dailytime').value || '23:20' }
+  };
+  try {
+    await dapi('diary/config', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ cfg: cfgNext })
+    });
+    toast('设置已保存');
+    await loadDiary(true);
+  } catch (error) { toast(error.message, true); }
+}
+
+$('dy-key').addEventListener('change', async (e) => {
+  dyCurrentKey = e.target.value;
+  try {
+    const data = await dapi('diary/status');
+    renderDiarySession((data.sessions || []).find((s) => s.key === dyCurrentKey));
+  } catch {}
+  await loadDiaryList();
+});
+$('dy-write-full').addEventListener('click', () => void diaryWrite('full'));
+$('dy-write-brief').addEventListener('click', () => void diaryWrite('brief'));
+$('dy-write-life').addEventListener('click', () => void diaryWrite('life'));
+$('dy-save').addEventListener('click', () => void saveDiaryCfg());
+
 // ── 页面切换 ────────────────────────────────────────────
 function go(id) {
   const m = document.getElementById('main');
@@ -2311,6 +2648,7 @@ function go(id) {
     if (id === 'official') { void loadOfficial(); }
     if (id === 'update') { void loadVersion(false); }
     if (id === 'stickers') void loadStickers(false);
+    if (id === 'diary') void loadDiary();
   if (id === 'start') void loadStart();
     if (id === 'personalize') void loadPersonalize();
     if (id === 'allow') void loadScope();

@@ -25,6 +25,8 @@
 
 [Setup]
 AppId={{D4A2B7E1-6C3F-4F8A-9B21-5E7C8D3A9F10}
+; 安装程序自己的图标（和 exe 用同一张，App/卸载列表里也就一致了）
+SetupIconFile=..\app\icon.ico
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}

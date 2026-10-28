@@ -28,6 +28,7 @@ import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, in
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
 import { QuietHours } from './quiet-hours.mjs';
+import * as diaryLib from './memory-diary.mjs';
 import { buildWorldPrompt } from './world-prompt.mjs';
 import { synthesizeFish, TtsError, saveTtsAudio, measureSeconds, estimateMp3Seconds } from './tts-fish.mjs';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
@@ -763,6 +764,10 @@ function loadConfig() {
     // （走腾讯 QQ 开放平台的机器人，由 ~/.dsh/profiles/qqbot 里的 dsh 实例负责收发）。
     // 注意这里是白名单式组装，file 里的键不抄进来就读不到——加新键必须同步加一行。
     qqChannel: file.qqChannel === 'official' ? 'official' : 'onebot',
+    // 记忆日记：bot 在「上下文被换掉」之前给失忆后的自己写日记，新会话抬头再把最近几天读回来。
+    // 这里只把原始对象带进来，归一到默认值交给 memory-diary.mjs 的 resolveCfg（面板存回来
+    // 的残缺配置也能吃下）。字段含义见那里的 DEFAULT_CFG。
+    diary: file.diary && typeof file.diary === 'object' && !Array.isArray(file.diary) ? file.diary : {},
     // 后端选择：'dsh'（默认，连正在运行的 DeepSeek Harness）或 'standalone'（自带 agent 运行时，
     // 不依赖 DSH，见 src/backend/）。两个后端的接口形状一致，切换只改这一行 + 下面 llm 段。
     backend: file.backend === 'standalone' ? 'standalone' : 'dsh',
@@ -856,8 +861,9 @@ function loadConfig() {
       activeReplyDelayMaxMs: 8 * 1000,
       // 活跃超时主动退出（防止活跃群中一直保持活跃）
       activeDurationEnabled: true,     // 总开关：是否启用“活跃超过时长后主动收尾退场”
-      activeDurationMinMs: 15 * 60 * 1000, // 活跃状态最长持续时间下限（进入活跃那一刻起算，分钟）
-      activeDurationMaxMs: 30 * 60 * 1000, // 活跃状态最长持续时间上限（分钟）
+      // 这两个值现在同时充当【reserved2 连发 N 轮后的冷静时长】区间（默认 20~40 分钟）
+      activeDurationMinMs: 20 * 60 * 1000, // 活跃状态最长持续时间下限（进入活跃那一刻起算，分钟）
+      activeDurationMaxMs: 40 * 60 * 1000, // 活跃状态最长持续时间上限（分钟）
       // 冷场处理
       idleWindowMs: 6 * 60 * 1000,    // 活跃期多久没人说话算冷场
       idleRetryProbability: 0.25,     // 冷场时 AI 继续说一句（试探群友意愿）的概率
@@ -886,6 +892,16 @@ function loadConfig() {
     socialV2: {
       enabled: true,
       autoReplyCheckMs: 30000,
+      // 随机沉默总开关：false = 任何情况下都不因概率/关键词而沉默
+      silenceEnabled: true,
+      // 沉默概率（不设则回落到 social.skipProbability）
+      silenceProbability: 0.1,
+      // 连发冷静总开关：false = 永远不进冷静期
+      cooldownEnabled: true,
+      // 群聊连续发满这么多轮就强制冷静一段时间（时长复用 social.activeDurationMinMs/MaxMs）
+      activeRunMaxRounds: 6,
+      // 冷静期内 @/叫名字/提问/私聊 仍然照常回（真人被点名不会装死）
+      cooldownExemptMentions: true,
       agentPreset: 'qq-chat-v2',
       provideRecommendations: true,
       tools: {
@@ -3778,7 +3794,7 @@ async function main() {
         // 管理端专用 v2 接口：带 agent token 的请求一律拒绝，防止 MCP 工具越权访问控制台功能
         // /api/socialV2/initial-prompt 也在这里：它是操作者写给 AI 的"环境背景"，
         // 让 AI 自己读/改等于把控制台的管理输入（以及未来可能写入的其它群信息）交给会话主体。
-        const adminOnlyV2Paths = ['/api/socialV2/config', '/api/socialV2/activity', '/api/socialV2/reset', '/api/socialV2/states', '/api/socialV2/wake', '/api/socialV2/initial-prompt', '/api/socialV2/proactive-now'];
+        const adminOnlyV2Paths = ['/api/socialV2/config', '/api/socialV2/activity', '/api/socialV2/reset', '/api/socialV2/states', '/api/socialV2/wake', '/api/socialV2/initial-prompt', '/api/socialV2/proactive-now', '/api/diary/status', '/api/diary/config', '/api/diary/list', '/api/diary/read', '/api/diary/write', '/api/diary/delete'];
         if (req.headers['x-agent-token'] && (adminOnlyV2Paths.includes(url.pathname) || (url.pathname === '/api/socialV2/feedback' && req.method === 'GET') || (url.pathname === '/api/socialV2/tool-log' && req.method === 'GET'))) {
           sendJson({ ok: false, error: '该接口仅控制台可用' }, 403);
           return;
@@ -5125,6 +5141,19 @@ async function main() {
             if (merged.context.inlineWakeMessages !== undefined) merged.context.inlineWakeMessages = merged.context.inlineWakeMessages === true;
           }
           if (merged.enabled !== undefined) merged.enabled = merged.enabled === true;
+          // 防霸屏开关：随机沉默 / 连发冷静（布尔严格化 + 概率与轮数 clamp）
+          if (merged.silenceEnabled !== undefined) merged.silenceEnabled = merged.silenceEnabled === true;
+          if (merged.cooldownEnabled !== undefined) merged.cooldownEnabled = merged.cooldownEnabled === true;
+          if (merged.silenceProbability !== undefined) {
+            const raw = merged.silenceProbability;
+            const n = (raw === null || raw === '') ? NaN : Number(raw);
+            merged.silenceProbability = Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : (current.silenceProbability ?? 0.1);
+          }
+          if (merged.activeRunMaxRounds !== undefined) {
+            const raw = merged.activeRunMaxRounds;
+            const n = (raw === null || raw === '') ? NaN : Number(raw);
+            merged.activeRunMaxRounds = Number.isFinite(n) ? Math.min(50, Math.max(1, Math.round(n))) : (current.activeRunMaxRounds ?? 6);
+          }
           if (merged.provideRecommendations !== undefined) merged.provideRecommendations = merged.provideRecommendations === true;
           if (merged.agentPreset !== undefined) merged.agentPreset = String(merged.agentPreset ?? '');
           file.socialV2 = merged;
@@ -7672,6 +7701,85 @@ async function main() {
           sendJson({ ok: true, key, category: category || 'all', memory: formatMemoryV2(st) });
           return;
         }
+        // ── 记忆日记（控制台/面板专用，带 agent token 的一律拒绝） ─────────────
+        if (url.pathname === '/api/diary/status' && req.method === 'GET') {
+          sendJson({ ok: true, ...(await diaryStatusV2()) });
+          return;
+        }
+        if (url.pathname === '/api/diary/config' && req.method === 'GET') {
+          sendJson({ ok: true, cfg: diaryCfg() });
+          return;
+        }
+        if (url.pathname === '/api/diary/config' && req.method === 'POST') {
+          const body = await readBody();
+          const next = diaryLib.resolveCfg({ ...diaryCfg(), ...(body.cfg && typeof body.cfg === 'object' ? body.cfg : body) });
+          diaryStore.setCfg(next);
+          cfg.diary = next;
+          diaryInvalidate();
+          // 记进 config.json：否则重启就回到默认值
+          try {
+            const p = process.env.QQ_BOT_CONFIG || path.join(ROOT, 'config.json');
+            const raw = readJsonSafe(p, {}) ?? {};
+            raw.diary = next;
+            atomicWriteJson(p, raw);
+          } catch (error) {
+            log(`[diary] 保存 config.json 失败：${error?.message ?? error}`);
+          }
+          log(`[diary] 配置已更新：enabled=${next.enabled} inject=${next.inject} ${next.injectDays}天 上限${next.injectMaxChars}字 scope=${next.scope}`);
+          sendJson({ ok: true, cfg: next });
+          return;
+        }
+        if (url.pathname === '/api/diary/list' && req.method === 'GET') {
+          const key = String(url.searchParams.get('key') ?? '').trim();
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          const days = await diaryStore.listDays(diaryScopeKey(key), { months: 6 });
+          const state = await diaryStore.readState();
+          sendJson({
+            ok: true,
+            key,
+            days: days.map((d) => ({
+              day: d.day,
+              entries: diaryLib.parseDiary(d.text).entries.map((e) => ({
+                at: e.at, mode: e.mode, absorbed: e.absorbed, chars: diaryLib.bodyChars(e.text), preview: String(e.text).replace(/\s+/g, ' ').slice(0, 60)
+              }))
+            })),
+            summary: state.summary?.[key] ?? ''
+          });
+          return;
+        }
+        if (url.pathname === '/api/diary/read' && req.method === 'GET') {
+          const key = String(url.searchParams.get('key') ?? '').trim();
+          const day = String(url.searchParams.get('day') ?? '').trim();
+          if (!key || !/^\d{4}-\d{2}-\d{2}$/.test(day)) { sendJson({ ok: false, error: 'key/day 不合法' }, 400); return; }
+          const text = await diaryStore.readFile(diaryScopeKey(key), day);
+          if (!text.trim()) { sendJson({ ok: false, error: '这一天没有日记' }, 404); return; }
+          sendJson({ ok: true, key, day, text });
+          return;
+        }
+        if (url.pathname === '/api/diary/write' && req.method === 'POST') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          const mode = ['full', 'brief', 'life'].includes(body.mode) ? body.mode : 'brief';
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          const result = await queueDiaryWrite(key, mode, 'manual');
+          sendJson({ ok: result?.ok === true, ...result }, result?.ok ? 200 : 400);
+          return;
+        }
+        if (url.pathname === '/api/diary/delete' && req.method === 'POST') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          const day = String(body.day ?? '').trim();
+          if (!key || !/^\d{4}-\d{2}-\d{2}$/.test(day)) { sendJson({ ok: false, error: 'key/day 不合法' }, 400); return; }
+          try {
+            await fs.promises.unlink(diaryStore.filePath(diaryScopeKey(key), day));
+            diaryInvalidate(key);
+            log(`[diary] 删掉 ${key} 的 ${day} 日记`);
+            sendJson({ ok: true, key, day });
+          } catch (error) {
+            sendJson({ ok: false, error: `删除失败：${error?.message ?? error}` }, 400);
+          }
+          return;
+        }
         // ── 二代黑话学习（reserved2）：AI 查询/提交黑话候选 ─────────────────
         if (req.method === 'GET' && url.pathname === '/api/socialV2/slang/query') {
           const key = String(url.searchParams.get('key') ?? '').trim();
@@ -8894,6 +9002,7 @@ async function main() {
       }
     }
     return sendChain.then(() => {
+      if (sent.length > 0) noteActiveRoundV2(key);
       if (failed.length > 0) {
         const err = new Error(`QQ 发送失败 ${failed.length}/${messages.length} 条：${failed[0]?.message ?? '未知错误'}`);
         err.sent = sent.slice();
@@ -9383,6 +9492,11 @@ async function main() {
         preSleepWaitSatisfiedAt: 0,
         preSleepWaitObservedAt: 0,
         preSleepWaitAccumMs: 0,
+        // 连发计数与冷静期（群聊防霸屏）
+        activeRunStartedAt: 0,
+        activeRoundCount: 0,
+        cooldownUntil: 0,
+        silencedWakeCount: 0,
         lastUnreadSeq: 0,
         lastReadThroughSeq: 0,
         modelSeenSeqs: new Set(),
@@ -9459,6 +9573,10 @@ async function main() {
             preSleepWaitSatisfiedAt: Number(val.preSleepWaitSatisfiedAt) || 0,
             preSleepWaitObservedAt: Number(val.preSleepWaitObservedAt) || 0,
             preSleepWaitAccumMs: Number(val.preSleepWaitAccumMs) || 0,
+            activeRunStartedAt: Number(val.activeRunStartedAt) || 0,
+            activeRoundCount: Number(val.activeRoundCount) || 0,
+            cooldownUntil: Number(val.cooldownUntil) || 0,
+            silencedWakeCount: Number(val.silencedWakeCount) || 0,
             lastUnreadSeq: Number(val.lastUnreadSeq) || 0,
             lastReadThroughSeq: Number.isSafeInteger(val.lastReadThroughSeq) && val.lastReadThroughSeq >= 0
               ? Math.min(val.lastReadThroughSeq, Number(val.lastUnreadSeq) || 0) : 0,
@@ -9555,6 +9673,10 @@ async function main() {
           preSleepWaitSatisfiedAt: st.preSleepWaitSatisfiedAt || 0,
           preSleepWaitObservedAt: st.preSleepWaitObservedAt || 0,
           preSleepWaitAccumMs: st.preSleepWaitAccumMs || 0,
+          activeRunStartedAt: st.activeRunStartedAt || 0,
+          activeRoundCount: st.activeRoundCount || 0,
+          cooldownUntil: st.cooldownUntil || 0,
+          silencedWakeCount: st.silencedWakeCount || 0,
           lastUnreadSeq: st.lastUnreadSeq || 0,
           lastReadThroughSeq: st.lastReadThroughSeq || 0,
           activeTopics: Array.isArray(st.activeTopics) ? st.activeTopics.slice(-50) : [],
@@ -9760,6 +9882,347 @@ async function main() {
     const burst = recent.filter((m) => m && !m.isSelf && Date.now() - Number(m.time || 0) < 15000).length;
     if (burst >= 3) return 12000;
     return defaultMs;
+  }
+
+  // ── 记忆日记 ──────────────────────────────────────────────────────────────
+  // bot 在上下文被换掉之前，给「失忆后的自己」写一篇日记；新会话抬头自动把最近几天的
+  // 日记读回来。纯文件 + 一次直连模型调用，不经过 agent，所以不会在 QQ 里多出一轮对话。
+  // 逻辑本身在 src/memory-diary.mjs（可单测），这里只做接线：素材、注入、哨兵、定时。
+  const diaryStore = diaryLib.createDiaryStore({ root: STATE_DIR, cfg: cfg.diary });
+  const diaryInjectCache = new Map();  // key -> { text, at }
+  let diaryQueue = Promise.resolve();  // 写日记串行，别同时打多次模型
+  const diaryWriting = new Set();      // 正在写的会话，防同一本并发写
+
+  function diaryCfg() {
+    return diaryStore.cfg;
+  }
+
+  function diaryRoleName() {
+    return String(readRoleState().role || '');
+  }
+
+  /** 注入用的是「谁的日记」：scope=global 时所有会话共读一本。 */
+  function diaryScopeKey(key) {
+    return diaryCfg().scope === 'global' ? '_global' : key;
+  }
+
+  /** 拼出这一轮要注入的日记文本（带 20 秒缓存，唤醒频繁时别反复读盘）。 */
+  async function ensureDiaryInjection(key) {
+    const c = diaryCfg();
+    if (!c.enabled || !c.inject) return '';
+    const cached = diaryInjectCache.get(key);
+    if (cached && Date.now() - cached.at < 20000) return cached.text;
+    let text = '';
+    try {
+      const today = diaryLib.dayKey(Date.now(), c.daily.timezone);
+      const days = await diaryStore.listDays(diaryScopeKey(key), { months: 4 });
+      const picked = diaryLib.pickInjectable(days, { days: c.injectDays, maxChars: c.injectMaxChars, today });
+      text = diaryLib.formatInjection(picked, { roleName: diaryRoleName() });
+    } catch (error) {
+      log(`[diary] 读日记失败 ${key}：${error?.message ?? error}`);
+      text = '';
+    }
+    diaryInjectCache.set(key, { text, at: Date.now() });
+    return text;
+  }
+
+  function diaryInjectionText(key) {
+    return diaryInjectCache.get(key)?.text || '';
+  }
+
+  /**
+   * 这一轮要不要把日记塞进去。
+   * 只在「换了新上下文」或者「隔了很久没说上话」时塞一次——每轮都塞等于把她自己的日记
+   * 复读一遍，既费 token 又容易让她开口就是「我记得你说过…」。
+   */
+  function shouldInjectDiaryV2(key, st) {
+    const c = diaryCfg();
+    if (!c.enabled || !c.inject) return false;
+    if (!diaryInjectionText(key)) return false;
+    const cooldownMs = Math.max(0, Number(c.injectCooldownMinutes ?? 240)) * 60000;
+    const sid = String(state.sessions?.[key] ?? '');
+    const lastSid = String(st?.diaryInjectedSession ?? '');
+    const lastAt = Number(st?.diaryInjectedAt ?? 0) || 0;
+    if (!lastAt) return true;                       // 从来没注过
+    if (sid && lastSid && sid !== lastSid) return true; // 换了新上下文
+    return Date.now() - lastAt >= cooldownMs;
+  }
+
+  /** 注入之后记一笔，避免同一段上下文里反复塞。 */
+  function noteDiaryInjectedV2(key, st) {
+    if (!st) return;
+    st.diaryInjectedAt = Date.now();
+    st.diaryInjectedSession = String(state.sessions?.[key] ?? '');
+    saveSocialV2State();
+  }
+
+  function diaryInvalidate(key) {
+    if (key) diaryInjectCache.delete(key);
+    else diaryInjectCache.clear();
+  }
+
+  // ── 素材：只取上次写完之后的新消息（游标存在会话状态里） ──────────────────
+  function collectDiaryMaterialV2(key, st) {
+    const cursor = Number(st?.diaryCursor) || 0;
+    const list = Array.isArray(st?.recentMessages) ? st.recentMessages : [];
+    const fresh = list.filter((m) => {
+      if (!m) return false;
+      const seq = Number(m.seq ?? 0);
+      if (cursor && seq && seq <= cursor) return false;
+      return true;
+    });
+    if (!fresh.length) return { text: '', lastSeq: cursor, count: 0 };
+    const lines = [];
+    for (const m of fresh.slice(-80)) {
+      const who = m.isSelf ? (diaryRoleName() || '我') : String(m.sender || '对方');
+      const body = String(m.text || m.plain || m.tail || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+      if (!body) continue;
+      const t = m.time ? new Date(Number(m.time)).toTimeString().slice(0, 5) : '';
+      lines.push(`${t ? t + ' ' : ''}${who}：${body}`);
+    }
+    const lastSeq = fresh.reduce((acc, m) => Math.max(acc, Number(m.seq ?? 0) || 0), cursor);
+    return { text: lines.join('\n').slice(-8000), lastSeq, count: lines.length };
+  }
+
+  // ── 直连模型：只为了写日记，不产生 QQ 回合 ────────────────────────────────
+  async function callDiaryLlm({ system, user, maxTokens = 1600 }) {
+    const lc = cfg.llm ?? {};
+    let apiKey = String(lc.apiKey ?? '');
+    const envRef = /^\$\{([A-Z0-9_]+)\}$/.exec(apiKey.trim());
+    if (envRef) apiKey = String(process.env[envRef[1]] ?? '');
+    if (!apiKey || !lc.baseUrl) {
+      throw new Error('没有可用的模型 apiKey/baseUrl（config.json 的 llm 段），写不了日记');
+    }
+    const url = `${String(lc.baseUrl).replace(/\/+$/, '')}/chat/completions`;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), Math.min(180000, Number(lc.timeoutMs) || 120000));
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: String(lc.model || 'deepseek-chat'),
+          messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+          temperature: 0.9,
+          max_tokens: maxTokens,
+          stream: false
+        }),
+        signal: ac.signal
+      });
+      const raw = await res.text();
+      if (!res.ok) throw new Error(`HTTP ${res.status}：${raw.slice(0, 200)}`);
+      let json;
+      try { json = JSON.parse(raw); } catch { throw new Error('模型返回的不是 JSON'); }
+      const content = json?.choices?.[0]?.message?.content;
+      if (typeof content !== 'string' || !content.trim()) throw new Error('模型返回空内容');
+      return content.trim();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** 写一篇日记：素材 → 模型 → 追加进当天文件 → 更新游标/统计。 */
+  async function writeDiaryV2(key, mode = 'brief', reason = 'manual') {
+    const c = diaryCfg();
+    if (!c.enabled) return { ok: false, error: 'diary-disabled' };
+    if (diaryWriting.has(key)) return { ok: false, error: 'busy' };
+    diaryWriting.add(key);
+    const st = getSocialV2State(key);
+    try {
+      const state = await diaryStore.readState();
+      const material = collectDiaryMaterialV2(key, st);
+      const preamble = state.summary?.[key] ?? '';
+      if (mode !== 'life' && !material.text.trim()) {
+        diaryWriting.delete(key);
+        return { ok: false, error: 'no-material' };
+      }
+      // 完整篇每天有配额；超了就降级成简记
+      const today = diaryLib.dayKey(Date.now(), c.daily.timezone);
+      const fullsToday = Number(state.fullCount?.[key]?.[today] ?? 0);
+      let useMode = mode;
+      if (useMode === 'full' && fullsToday >= Math.max(1, c.fullPerDay) && reason !== 'manual') useMode = 'brief';
+      const memo = Array.isArray(state.memo?.[key]) ? state.memo[key] : [];
+      const prompt = diaryLib.buildWritePrompt({
+        mode: useMode,
+        roleName: diaryRoleName(),
+        material: material.text,
+        preamble,
+        nowText: diaryLib.isoLocal(Date.now(), c.daily.timezone).replace('T', ' '),
+        extraInstruction: c.extraInstruction,
+        memo
+      });
+      const raw = await callDiaryLlm({ system: prompt.system, user: prompt.user, maxTokens: useMode === 'full' ? 1600 : 500 });
+      const parsed = diaryLib.parseWriteResult(raw, { mode: useMode, preamble });
+      const day = today;
+      const file = diaryStore.filePath(diaryScopeKey(key), day);
+      const before = await diaryStore.readFile(diaryScopeKey(key), day);
+      let next = diaryLib.appendEntry(before, {
+        at: diaryLib.isoLocal(Date.now(), c.daily.timezone),
+        mode: useMode,
+        text: parsed.body
+      }, useMode === 'full' ? parsed.summary : undefined);
+      let absorbed = 0;
+      if (useMode === 'full') {
+        // 完整篇吸收同一天的简记：原文保留但标记「已吸收」，注入时跳过
+        const res = diaryLib.markAbsorbed(next, { day });
+        next = res.text;
+        absorbed = res.changed;
+      }
+      await diaryStore.writeFile(diaryScopeKey(key), day, next);
+      await diaryStore.updateState((s) => {
+        s.lastWriteAt ??= {};
+        s.lastFullDay ??= {};
+        s.fullCount ??= {};
+        s.autoDoneAt ??= {};
+        s.summary ??= {};
+        s.lastWriteAt[key] = Date.now();
+        if (useMode === 'full') {
+          s.lastFullDay[key] = day;
+          s.fullCount[key] ??= {};
+          s.fullCount[key][day] = Number(s.fullCount[key][day] ?? 0) + 1;
+          if (parsed.summary) s.summary[key] = String(parsed.summary).slice(0, 400);
+        }
+        if (reason === 'context-full') s.autoDoneAt[key] = Date.now();
+        if (memo.length && useMode !== 'brief') s.memo[key] = [];
+        return s;
+      });
+      if (material.lastSeq) {
+        st.diaryCursor = material.lastSeq;
+        saveSocialV2State();
+      }
+      diaryInvalidate(key);
+      const chars = diaryLib.bodyChars(parsed.body);
+      log(`[diary] 写好一篇${diaryLib.MODE_LABEL[useMode]}（${key}${reason ? `，${reason}` : ''}）：${chars} 字${absorbed ? `，吸收 ${absorbed} 篇简记` : ''} → ${path.relative(ROOT, file)}`);
+      appendActivity(`记忆日记 · ${diaryLib.describeKey(key)} · ${diaryLib.MODE_LABEL[useMode]} ${chars} 字`);
+      return { ok: true, mode: useMode, chars, day, file, absorbed, summary: parsed.summary };
+    } catch (error) {
+      log(`[diary] 写日记失败 ${key}：${error?.message ?? error}`);
+      return { ok: false, error: String(error?.message ?? error) };
+    } finally {
+      diaryWriting.delete(key);
+    }
+  }
+
+  /** 串行排队写，避免 ticker 与手动同时打模型。 */
+  function queueDiaryWrite(key, mode, reason) {
+    diaryQueue = diaryQueue
+      .then(() => writeDiaryV2(key, mode, reason))
+      .catch((error) => ({ ok: false, error: String(error?.message ?? error) }));
+    return diaryQueue;
+  }
+
+  /** 估算某个会话当前上下文占用（读 standalone 的会话文件，拿真实历史体量）。 */
+  async function estimateContextTokensV2(key, st) {
+    const c = diaryCfg();
+    // 基础开销：角色卡 + 唤醒提示 + 工具定义，按经验值算，不真的去拼 prompt
+    // （拼 prompt 有副作用：会跑黑话匹配、写日志，一分钟一次的 ticker 不该干这个）。
+    const base = 2600;
+    const sid = state.sessions?.[key];
+    let history = 0;
+    if (sid) {
+      try {
+        const raw = await fs.promises.readFile(path.join(STATE_DIR, 'sessions', `${sid}.json`), 'utf8');
+        history = diaryLib.estimateTokens(raw);
+      } catch { history = 0; }
+    }
+    if (!history) {
+      // 读不到会话文件时退化成「最近消息 + 未读」的粗估，宁可早提醒也别失效
+      const list = [...(st?.recentMessages ?? []), ...(st?.unread ?? [])];
+      history = diaryLib.estimateTokens(list.map((m) => String(m?.text || m?.plain || '')).join('\n')) * 3;
+    }
+    return { tokens: base + history, base, history, limit: c.tokenLimit };
+  }
+
+  /** 哨兵 + 每日定时：每 60 秒看一次，最多同时只写一篇。 */
+  function startDiaryTicker() {
+    const tick = async () => {
+      const c = diaryCfg();
+      if (!c.enabled) return;
+      try {
+        const state = await diaryStore.readState();
+        const keys = [...socialV2.conversations.keys()];
+        // 1) 每日定时：到点给「有素材」的会话各写一篇完整日记
+        const due = diaryLib.planDailyWrite({ now: Date.now(), cfg: c });
+        if (due && (state.dailyDone?.[due.day] ?? 0) < 1) {
+          for (const key of keys) {
+            const st = getSocialV2State(key);
+            const material = collectDiaryMaterialV2(key, st);
+            if (!material.count) continue;
+            const r = await queueDiaryWrite(key, 'full', 'daily');
+            if (r?.ok) {
+              await diaryStore.updateState((s) => {
+                s.dailyDone ??= {};
+                s.dailyDone[due.day] = Number(s.dailyDone[due.day] ?? 0) + 1;
+                return s;
+              });
+              return; // 一轮只写一个会话，剩下的下一分钟继续
+            }
+          }
+        }
+        // 2) 上下文哨兵
+        for (const key of keys) {
+          if (diaryWriting.has(key)) continue;
+          const st = getSocialV2State(key);
+          const material = collectDiaryMaterialV2(key, st);
+          const { tokens } = await estimateContextTokensV2(key, st);
+          const plan = diaryLib.planAutoWrite({
+            now: Date.now(),
+            cfg: c,
+            state,
+            tokens,
+            hasMaterial: material.count > 0,
+            key
+          });
+          if (!plan) continue;
+          // 第一次写完整日记要攒够素材：一两条消息就写一篇「完整」太浪费，也容易瞎编。
+          if (plan.reason === 'first' && material.count < Math.max(1, Number(c.firstMinMessages ?? 8))) continue;
+          if (plan.remind) {
+            await diaryStore.updateState((s) => {
+              s.lastRemindAt ??= {};
+              s.lastRemindAt[key] = Date.now();
+              return s;
+            });
+            log(`[diary] 上下文约 ${Math.round((plan.ratio ?? 0) * 100)}%，提醒 ${key} 该写日记了`);
+          }
+          const r = await queueDiaryWrite(key, plan.mode, plan.reason);
+          if (r?.ok) return; // 一轮只写一篇，别把模型打爆
+        }
+      } catch (error) {
+        log(`[diary] ticker 异常：${error?.message ?? error}`);
+      }
+    };
+    const timer = setInterval(() => { void tick(); }, 60000);
+    timer.unref?.();
+    log('[diary] 记忆日记已启动（哨兵 + 每日定时）');
+    return timer;
+  }
+
+  /** 面板用：一次性状态快照。 */
+  async function diaryStatusV2() {
+    const c = diaryCfg();
+    const state = await diaryStore.readState();
+    const keys = [...socialV2.conversations.keys()];
+    const sessions = [];
+    for (const key of keys) {
+      const st = getSocialV2State(key);
+      const material = collectDiaryMaterialV2(key, st);
+      const est = await estimateContextTokensV2(key, st);
+      const injectText = await ensureDiaryInjection(key);
+      sessions.push({
+        key,
+        label: diaryLib.describeKey(key),
+        pct: Math.round((est.tokens / Math.max(1, est.limit)) * 100),
+        tokens: est.tokens,
+        limit: est.limit,
+        pending: material.count,
+        injectChars: injectText.length,
+        injectPreview: injectText.replace(/\s+/g, ' ').slice(0, 120),
+        willInject: shouldInjectDiaryV2(key, st),
+        lastWriteAt: state.lastWriteAt?.[key] ?? 0,
+        summary: state.summary?.[key] ?? ''
+      });
+    }
+    return { cfg: c, sessions, base: diaryStore.base };
   }
 
   function formatMemoryV2(st) {
@@ -11247,6 +11710,8 @@ async function main() {
     }
     const memoryText = formatMemoryV2(st);
     const memoryLine = memoryText ? `${memoryText}\n\n` : '';
+    // 记忆日记：失忆前的自己留下的话。由 ensureDiaryInjection 预填缓存，这里同步取。
+    const diaryLine = shouldInjectDiaryV2(key, st) ? diaryInjectionText(key) : '';
     // 这条消息里出现的黑话：命中就精准注入那几条。
     // 比「让模型自己想起来调 qq_slang_query」可靠——实测它根本不查。
     // 匹配窗口默认最近 15 条（slang.matchWindow 可调）：太窄的话，梗刷过去两轮就再也吃不到。
@@ -11314,7 +11779,7 @@ async function main() {
       ? '【语音请求】对方明确要求你用声音回应：请调用 qq_tts_say(ja, zh) 把这句话念出来（ja 只放日语台词，zh 是对应中文字幕）。发完不要再重复发一遍同样的文字。\n\n'
       : '';
     if (voiceAskedAt) voiceRequests.delete(key);
-    const base = roleLine + identityLine + tokenLine + initialPromptLine + antiAiLine + proactiveLine + stickerLine + replyLine + statusLine + wakeLine + memoryLine + participationLine + preSleepLine + voiceLine + slangHitLine;
+    const base = roleLine + identityLine + tokenLine + initialPromptLine + antiAiLine + proactiveLine + stickerLine + replyLine + statusLine + wakeLine + memoryLine + diaryLine + participationLine + preSleepLine + voiceLine + slangHitLine;
     if (reason === 'bootstrap') {
       return `${base}【引导唤醒】你已接入 QQ 会话 ${key}。\n当前是二代仿真模式：你的文本输出不会自动发送到 QQ，所有发言必须通过工具完成。\n请先调用 qq_get_prompt 查看角色、推荐值、可用工具和状态；有待回应的消息先按首回复节奏处理，最后才用 qq_set_wake_config 设置你希望如何被唤醒。`;
     }
@@ -11408,6 +11873,17 @@ ${recentBlock}
       return;
     }
     const st = getSocialV2State(key);
+    // 冷静期闸门：连发太多轮之后强制安静一段时间，期间普通唤醒一律不投递。
+    if (cooldownActiveV2(st)) {
+      const exempt = mustReplyReasonV2(reason) && cfg.socialV2?.cooldownExemptMentions !== false;
+      if (!exempt) {
+        const leftMin = Math.max(1, Math.round((Number(st.cooldownUntil) - Date.now()) / 60000));
+        log(`[reserved2] 冷静期中，跳过唤醒 ${key}（${reason}），还剩 ${leftMin} 分钟`);
+        return;
+      }
+    }
+    // 选择性沉默：普通闲聊按 skipProbability 不回（@/名字/提问/私聊 已在内部绕过）。
+    if (shouldSilenceWakeV2(key, st, reason)) return;
     // 不是主动搭话的唤醒：清掉可能残留的 proactive pending，避免普通回复被算成主动开口。
     if (reason !== 'proactiveCheck') st.proactiveWakePendingAt = 0;
     // 防重入：如果该会话已经有一个 DSH turn 在进行中（AI 正在思考/调用工具），
@@ -11483,7 +11959,10 @@ ${recentBlock}
     st.wakeConfig.wakeCount = (st.wakeConfig.wakeCount || 0) + 1;
     st.lastWakeReason = reason;
     saveSocialV2State();
+    // 先把日记缓存备好，buildWakePromptV2 是同步的，拿的是缓存。
+    await ensureDiaryInjection(key);
     const promptText = buildWakePromptV2(key, reason);
+    if (shouldInjectDiaryV2(key, st)) noteDiaryInjectedV2(key, st);
     log(`[reserved2] 唤醒 ${key}（${reason}）`);
     const rollbackWakeTime = () => {
       const idx = st.wakeTimes.lastIndexOf(wakeTime);
@@ -11967,6 +12446,85 @@ ${recentBlock}
     nightStickerTickNow();
     const timer = setInterval(nightStickerTickNow, 60 * 1000);
     timer.unref?.();
+  }
+
+  // 连续发言窗口：超过这么久没发过言，连发轮数重新计数（真人不会隔一小时还算「同一串」）。
+  const ACTIVE_RUN_WINDOW_MS = 30 * 60 * 1000;
+
+  /** 这些唤醒原因一律不算「闲聊」：被点名/被问/私聊/戳一把都要回。 */
+  function mustReplyReasonV2(reason) {
+    const r = String(reason ?? '');
+    return r === 'private' || r === 'atMention' || r === 'question' || r === 'poke' || r === 'admin'
+      || r.startsWith('nameMention') || r.startsWith('speaker');
+  }
+
+  function cooldownActiveV2(st) {
+    return Number(st?.cooldownUntil) > Date.now();
+  }
+
+  /**
+   * 群聊连发轮数计数：每成功发出一轮 +1，达到 activeRunMaxRounds 就进入冷静期。
+   * 冷静时长复用 social.activeDurationMinMs/MaxMs（默认 20~40 分钟随机）。
+   * 只统计群聊：私聊是 1v1 对话，本来就该一直有来有回。
+   */
+  function noteActiveRoundV2(key) {
+    if (currentMode !== 'reserved2') return;
+    if (cfg.socialV2?.enabled === false) return;
+    // 独立开关：socialV2.cooldownEnabled=false 时完全不进冷静期（控制台「防霸屏开关」里可关）。
+    if (cfg.socialV2?.cooldownEnabled === false) return;
+    if (!String(key).startsWith('group:')) return;
+    const st = getSocialV2State(key);
+    const now = Date.now();
+    if (cooldownActiveV2(st)) return;
+    if (!st.activeRunStartedAt || now - st.activeRunStartedAt > ACTIVE_RUN_WINDOW_MS) {
+      st.activeRunStartedAt = now;
+      st.activeRoundCount = 0;
+    }
+    st.activeRoundCount = (Number(st.activeRoundCount) || 0) + 1;
+    const limit = Math.max(1, Number(cfg.socialV2?.activeRunMaxRounds) || 6);
+    if (st.activeRoundCount >= limit) {
+      const minMs = Math.max(60000, Number(cfg.social?.activeDurationMinMs) || 20 * 60 * 1000);
+      const maxMs = Math.max(minMs, Number(cfg.social?.activeDurationMaxMs) || 40 * 60 * 1000);
+      const waitMs = minMs + Math.floor(Math.random() * (maxMs - minMs + 1));
+      st.cooldownUntil = now + waitMs;
+      st.activeRoundCount = 0;
+      st.activeRunStartedAt = 0;
+      cancelReplyCheckV2(key);
+      log(`[reserved2] ${key} 连发 ${limit} 轮，进入冷静期 ${Math.round(waitMs / 60000)} 分钟（@/名字/提问/私聊 照常回）`);
+      appendActivity(`${key} [reserved2] 连发 ${limit} 轮，进入冷静期 ${Math.round(waitMs / 60000)} 分钟`);
+    }
+    saveSocialV2State();
+  }
+
+  /**
+   * 选择性沉默（旧「社交模式」的 skipProbability 搬到 reserved2）：
+   * 普通闲聊（概率唤醒 / 关键词唤醒）按概率不回；@、叫名字、提问、指定成员、私聊永远绕过。
+   * 沉默不清未读——消息留在缓冲区，下次真开口时一起看到。
+   */
+  function shouldSilenceWakeV2(key, st, reason) {
+    if (cfg.socialV2?.enabled === false) return false;
+    // 独立开关：socialV2.silenceEnabled=false 时一律不沉默（控制台「防霸屏开关」里可关）。
+    if (cfg.socialV2?.silenceEnabled === false) return false;
+    if (!String(key).startsWith('group:')) return false;
+    if (mustReplyReasonV2(reason)) return false;
+    const r = String(reason ?? '');
+    if (!(r === 'probability' || r.startsWith('keyword:'))) return false;
+    // 优先用 socialV2.silenceProbability（控制台「防霸屏开关」里的独立参数），
+    // 没设过就回落到一代的 social.skipProbability，再回落到 0.1。
+    const rawProb = cfg.socialV2?.silenceProbability ?? cfg.social?.skipProbability ?? 0.1;
+    let skipProb = Math.min(1, Math.max(0, Number(rawProb)));
+    if (skipProb <= 0) return false;
+    // 刚说完话 60 秒内有人接话，别突然不接（真人正在兴头上不会没来由地断掉）
+    if (Date.now() - Number(st.lastAiReplyAt || 0) < 60000) skipProb = 0;
+    // 未读越多说明话题越热，越不该沉默
+    const pressure = Math.min(0.5, (Array.isArray(st.unread) ? st.unread.length : 0) * 0.1);
+    skipProb = Math.max(0, skipProb - pressure);
+    if (skipProb <= 0) return false;
+    if (Math.random() >= skipProb) return false;
+    st.silencedWakeCount = (Number(st.silencedWakeCount) || 0) + 1;
+    saveSocialV2State();
+    log(`[reserved2] 选择性沉默 ${key}（${reason}，skip=${skipProb.toFixed(2)}），消息留在未读等下次一起看`);
+    return true;
   }
 
   function scheduleReplyCheckV2(key) {
@@ -13784,6 +14342,8 @@ ${recentBlock}
   startQuietTicker();
   startNightStickerTicker();
   startQzoneTicker();
+  // 记忆日记：哨兵（上下文快满提醒/自动写）+ 每日定时写。
+  startDiaryTicker();
   startConsoleServer();
 
   await pumpMux();
