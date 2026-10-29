@@ -22,6 +22,7 @@ import { clearFailedWakeTurn } from './turn-outcome.mjs';
 import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-plain.js';
 import { SENSITIVE_RE } from './sensitive.js';
 import { looksLikeUnfinished } from './v2-wait.js';
+import { writePort } from './ports.mjs';
 import { compactModelMessage } from './qq-model-view.js';
 import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
@@ -8194,15 +8195,42 @@ async function main() {
         sendJson({ ok: false, error: error?.message ?? String(error) }, status);
       }
     });
-    server.listen(port, '127.0.0.1', () => {
-      log(`本地控制台已启动：http://127.0.0.1:${port}`);
-    });
+    // Windows 上 127.0.0.1 的 bind 会撞上「动态端口排除范围」（Hyper-V / WSL / Docker
+    // 每开机重新划一段，比如某次开机把 3072-3171 整段保留掉），此时报的**不是** EADDRINUSE
+    // 而是 EACCES。原来的写法对任何非 EADDRINUSE 的错误一律 exit(1)，面板就会看到
+    // 「机器人已启动 → 1 秒内退出」无限重启。这里改成按候选端口重试，并把**实际**端口
+    // 写进 state/console-port，面板读它来代理，两边才不会各说各话。
+    const actualPortFile = path.join(STATE_DIR, 'console-port');
+    const reservedForUs = new Set([3180, 3199, 38000, 38001]);
+    const candidates = [port];
+    for (const p of [3300, 3310, 3320, 3330, 3340, 3350, 3360, 3370, 3380, 3390, 3400]) {
+      if (!reservedForUs.has(p)) candidates.push(p);
+    }
+    let attempt = 0;
+    const announceListening = () => {
+      const actual = server.address()?.port ?? candidates[attempt];
+      try { fs.writeFileSync(actualPortFile, String(actual)); } catch { /* 写不了就算了，面板会回落到配置值 */ }
+      try { writePort(ROOT, 'console', actual); } catch { /* 同上 */ }
+      log(`本地控制台已启动：http://127.0.0.1:${actual}${actual === port ? '' : `（${port} 被系统占用/保留，已改用 ${actual}）`}`);
+    };
+    // 只用一次性的 'listening' 监听器：把回调挂在 listen() 上时，第一次 listen 虽然报错
+    // 但从没触发过，那个回调会一直留着，换端口成功后就跟新的回调一起响，日志写两遍。
+    server.once('listening', announceListening);
+    server.listen(candidates[0], '127.0.0.1');
     // 端口被占用说明已有实例在跑：以 exit 2 退出，守护脚本会识别为"已有实例"而不是无限重启
     server.on('error', (error) => {
+      const code = error?.code;
       log(`控制台服务错误: ${error?.message ?? error}`);
-      if (error?.code === 'EADDRINUSE') {
-        console.error(`[bridge] 控制台端口 ${port} 已被占用（可能已有实例在运行），退出。`);
+      if (code === 'EADDRINUSE' && attempt === 0) {
+        console.error(`[bridge] 控制台端口 ${candidates[0]} 已被占用（可能已有实例在运行），退出。`);
         process.exit(2);
+      }
+      const retryable = code === 'EACCES' || code === 'EADDRINUSE' || code === 'EADDRNOTAVAIL';
+      if (retryable && attempt + 1 < candidates.length) {
+        attempt += 1;
+        log(`控制台端口 ${candidates[attempt - 1]} 不可用，改试 ${candidates[attempt]}…`);
+        server.listen(candidates[attempt], '127.0.0.1');
+        return;
       }
       process.exit(1);
     });

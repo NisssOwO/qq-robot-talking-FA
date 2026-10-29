@@ -14,7 +14,7 @@ using Microsoft.Web.WebView2.WinForms;
 
 // QQ 聊天机器人 · 独立版启动器
 // 结构：本程序 = 窗口宿主（WebView2）+ 面板进程管理器 + 托盘图标
-//   - 启动时隐藏拉起 node app\ui.mjs，等 127.0.0.1:3199 就绪
+//   - 启动时隐藏拉起 node app\ui.mjs，等面板就绪（端口取自 state\ports.json，默认 3199）
 //   - 窗口用 WebView2 显示面板页面（和之前 Edge 里看到的一模一样）
 //   - 点 × 不退出：按设置缩到托盘，或询问后处理
 //   - 托盘点「退出」时才真的结束，可一并停掉机器人与网关
@@ -45,7 +45,30 @@ static class Program
     public static readonly string StateDir = Path.Combine(Root, "state");
     public static readonly string SettingsFile = Path.Combine(StateDir, "ui.json");
     public static readonly string LogFile = Path.Combine(StateDir, "launcher.log");
-    public const string PanelUrl = "http://127.0.0.1:3199/";
+    // 面板监听的端口：以 state\ports.json 为准（app\ui.mjs listen 成功后写的实际端口）。
+    // 端口被系统保留（Windows 的动态端口排除范围会报 EACCES）或被别的程序占了时，
+    // 面板会自己换一个端口，这里跟着走，不再写死 3199。
+    public static int PanelPort()
+    {
+        try
+        {
+            var file = Path.Combine(StateDir, "ports.json");
+            if (File.Exists(file))
+            {
+                var dict = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(file));
+                object v;
+                if (dict != null && dict.TryGetValue("panel", out v) && v != null)
+                {
+                    int port = Convert.ToInt32(v);
+                    if (port > 0 && port < 65536) return port;
+                }
+            }
+        }
+        catch { /* 文件还没写、或写到一半：回落到默认端口 */ }
+        return 3199;
+    }
+
+    public static string PanelUrl { get { return "http://127.0.0.1:" + PanelPort() + "/"; } }
 
     static string Hash(string s)
     {
@@ -264,7 +287,7 @@ partial class MainForm : Form
     {
         if (!PanelUp())
         {
-            if (tries > 200) { ShowFallback("面板服务没有起来（127.0.0.1:3199），看 state\\ui.log。"); return; }
+            if (tries > 200) { ShowFallback("面板服务没有起来（127.0.0.1:" + Program.PanelPort() + "），看 state\\ui.log。"); return; }
             var t = new System.Windows.Forms.Timer();
             t.Interval = 300;
             t.Tick += delegate
@@ -297,10 +320,12 @@ partial class MainForm : Form
 
     void StartPanel()
     {
-        bool already = PortOpen(3199);
+        int port = Program.PanelPort();
+        // 端口被别的程序占着不等于「面板在跑」：要真的 ping 通 /panel/api/ping 才算。
+        bool already = PanelUp();
         if (already)
         {
-            Program.Log("面板已经在跑（3199），直接复用。");
+            Program.Log("面板已经在跑（" + port + "），直接复用。");
             return;
         }
         try

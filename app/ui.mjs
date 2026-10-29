@@ -19,6 +19,7 @@ import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as official from '../src/official-channel.mjs';
 import { isQQNTPath, readQQNTRoot, pickQQNTPath } from '../src/qq-detect.mjs';
+import { writePort, portOf } from '../src/ports.mjs';
 
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(APP_DIR, '..');
@@ -1247,7 +1248,7 @@ async function status() {
     probePort(ONEBOT_HTTP_PORT),
     probePort(ONEBOT_WS_PORT)
   ]);
-  const botAlive = children.bot && !children.bot.killed ? true : await probePort(Number(cfg?.consolePort ?? 3100), 500);
+  const botAlive = children.bot && !children.bot.killed ? true : await probePort(consolePortNow(cfg), 500);
   const qqProcs = await listQQProcesses();
   const ntRoot = await readQQNTRoot();
   const qqNTProcs = qqProcs.filter((p) => p.path && isQQNTPath(p.path, ntRoot));
@@ -1304,7 +1305,7 @@ async function status() {
           names: cfg.allow?.names ?? {},
           denyGroups: cfg.deny?.groups ?? [],
           denyPrivate: cfg.deny?.private ?? [],
-          consolePort: cfg.consolePort ?? 3100,
+          consolePort: consolePortNow(cfg),
           ownerQQ: cfg.ownerQQ ?? '',
           today: readSocialToday(cfg),
           // 界面上要填的不止语言模型一家：语音合成、联网搜索、网关令牌都是密钥。
@@ -1344,9 +1345,26 @@ async function status() {
   };
 }
 
+// 控制台实际端口：桥接 listen 撞上 Windows 的动态端口排除范围（Hyper-V / WSL 每开机
+// 重新划一段，bind 时报 EACCES）时会自动换端口，并把落地端口写进 state/console-port。
+// 这里优先用那个文件，否则回落到配置值，免得面板探活/代理/链接全指向一个没人监听的端口。
+function consolePortNow(cfg) {
+  const fallback = Number(cfg?.consolePort ?? 3100);
+  // 桥接把自己的实际端口写进 state/ports.json（新）和 state/console-port（老），两个都认。
+  try {
+    const fromJson = Number(portOf(ROOT, 'console', 0));
+    if (Number.isInteger(fromJson) && fromJson > 0) return fromJson;
+  } catch { /* 没这文件就往下走 */ }
+  try {
+    const actual = Number(fs.readFileSync(path.join(ROOT, 'state', 'console-port'), 'utf8').trim());
+    if (Number.isInteger(actual) && actual > 0 && actual < 65536) return actual;
+  } catch { /* 没这文件就是没换过端口 */ }
+  return fallback;
+}
+
 // 拼出带令牌的控制台地址；令牌优先取 config.consoleToken，没有就读桥接自动生成并落盘的那个。
 function consoleEntry(cfg) {
-  const port = Number(cfg?.consolePort ?? 3100);
+  const port = consolePortNow(cfg);
   let token = String(cfg?.consoleToken ?? '').trim();
   if (!token) {
     try { token = fs.readFileSync(path.join(ROOT, 'state', 'console-token'), 'utf8').trim(); } catch {}
@@ -1539,7 +1557,7 @@ async function startBot() {
   const priv = Array.isArray(cfg.allow?.private) ? cfg.allow.private.length : 0;
   if (!groups && !priv) return { ok: false, error: '请至少填一个群号或好友 QQ' };
   // 面板外面已经跑着一个（比如 launch.mjs 起的），别起第二个抢 38001。
-  if (await probePort(Number(cfg.consolePort ?? 3100), 500)) {
+  if (await probePort(consolePortNow(cfg), 500)) {
     return { ok: true, already: true, external: true };
   }
 
@@ -2273,13 +2291,22 @@ async function shutdown() {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
+// 端口候选：首选不变（书签别失效），真的绑不上才往后跳。
+// 跳 200 而不是 +1：Windows 的「动态端口排除范围」是整块划走的（比如某次开机把
+// 3072-3171 全占了），一个一个试要连撞十几次，跨着试命中率高得多。
+const UI_PORT_CANDIDATES = [port, port + 200, port + 400, port + 600, port + 800, port + 1000];
+let uiPortIndex = 0;
+
 server.on('error', async (error) => {
-  if (error?.code === 'EADDRINUSE') {
-    const url = `http://127.0.0.1:${port}/`;
+  const code = error?.code;
+  // 被占用的这个端口上，是不是已经有一个本程序的面板在跑？
+  // 每个候选端口都要问一遍：面板可能早就漂到 3399，而这次首选 3199 又被别人占了。
+  if (code === 'EADDRINUSE') {
+    const url = `http://127.0.0.1:${UI_PORT_CANDIDATES[uiPortIndex]}/`;
     // 已经有一个面板在跑：不要起第二个（否则两台进程抢同一份 state）。
     // 直接确认它活着，然后把窗口指过去。
     try {
-      const res = await fetch(`${url}panel/api/ping`);
+      const res = await fetch(`${url}panel/api/ping`, { signal: AbortSignal.timeout(2000) });
       const data = await res.json();
       if (data && data.ok) {
         console.log(`[ui] 面板已经在运行：${url}（复用，不再启动第二个）`);
@@ -2289,20 +2316,43 @@ server.on('error', async (error) => {
         return;
       }
     } catch {
-      // 占用端口的不是本程序的面板，走下面的提示。
+      // 占用端口的不是本程序的面板，换端口接着试。
     }
-    console.error(`[ui] 端口 ${port} 被别的程序占用了。关掉它，或设置 QQ_BOT_UI_PORT=3200 再启动。`);
-  } else {
-    console.error('[ui] 启动失败：', error?.message ?? error);
   }
+  const retryable = code === 'EADDRINUSE' || code === 'EACCES' || code === 'EADDRNOTAVAIL';
+  if (retryable && uiPortIndex + 1 < UI_PORT_CANDIDATES.length) {
+    const bad = UI_PORT_CANDIDATES[uiPortIndex];
+    uiPortIndex += 1;
+    const why = code === 'EACCES' ? '被系统保留（Windows 动态端口排除范围）' : '被别的程序占用';
+    console.log(`[ui] 端口 ${bad} ${why}，改试 ${UI_PORT_CANDIDATES[uiPortIndex]}…`);
+    server.listen(UI_PORT_CANDIDATES[uiPortIndex], '127.0.0.1');
+    return;
+  }
+  console.error(`[ui] 启动失败：${error?.message ?? error}`);
   process.exit(1);
 });
 
-server.listen(port, '127.0.0.1', () => {
-  const url = `http://127.0.0.1:${port}/`;
+server.once('listening', () => {
+  const actual = Number(server.address()?.port) || UI_PORT_CANDIDATES[uiPortIndex];
+  const url = `http://127.0.0.1:${actual}/`;
+  const moved = actual !== port;
+  // 实际端口落盘：托盘/快捷方式/以后 launcher 都靠它找面板，不用再写死 3199。
+  try { writePort(ROOT, 'panel', actual); } catch { /* 写不了不影响运行 */ }
   console.log(`[ui] 控制面板：${url}`);
   console.log(`[ui] 配置：${CONFIG_PATH}`);
-  if (OPEN_WINDOW) {
+  if (moved) {
+    console.log(`[ui] 端口 ${port} 被占用或被系统保留，已自动改用 ${actual}（地址变了，别再开旧地址）`);
+    if (HOSTED_BY_LAUNCHER) {
+      // exe 的窗口从 state\ports.json 读端口，会自己跟过来，不用再开一个浏览器窗口。
+      console.log('[ui] 窗口由 QQ聊天机器人.exe 提供：它会按 state\\ports.json 打开新端口，不用手动点。');
+    } else {
+      // 换了端口就必须自己把窗口打开：用户只记得旧地址，不开窗他会以为程序没起来。
+      const opened = openAppWindow(url, `端口 ${port} 不可用，自动改用 ${actual}`);
+      if (!opened) {
+        try { spawn('cmd', ['/c', 'start', '', url], { stdio: 'ignore', detached: true }).on('error', () => {}); } catch { /* 开不了就只留日志 */ }
+      }
+    }
+  } else if (OPEN_WINDOW) {
     const ok = openAppWindow(url, '启动时加了 --open');
     if (!ok) console.log(`[ui] 没找到 Edge/Chrome，手动打开 ${url}`);
   } else if (HOSTED_BY_LAUNCHER) {
@@ -2312,6 +2362,8 @@ server.listen(port, '127.0.0.1', () => {
   }
   autostart().catch((error) => log(`自动启动出错：${error?.message ?? error}`));
 });
+
+server.listen(UI_PORT_CANDIDATES[0], '127.0.0.1');
 
 // 配置齐了就自动把网关和机器人拉起来，让「双击 start.bat」等于「开始工作」。
 async function autostart() {
