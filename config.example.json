@@ -7,7 +7,8 @@
     "model": "deepseek-chat",
     "maxTokens": 8000,
     "temperature": 0.7,
-    "timeoutMs": 180000
+    "timeoutMs": 180000,
+    "thinking": "auto"
   },
   "dsh": {
     "baseUrl": "http://127.0.0.1:3080",
@@ -291,6 +292,41 @@
       "maxCount": 5
     },
     "greetingVoice": false,
+    "qzone": {
+      "enabled": false,
+      "prompt": "",
+      "contentModes": ["daily"],
+      "maxPerDay": 2,
+      "gapMinMin": 180,
+      "gapMaxMin": 480,
+      "ugcRight": 4,
+      "skipChance": 0.3,
+      "imageMode": "none",
+      "requireHook": true,
+      "hookSources": ["chat", "diary"],
+      "hookMinScore": 2,
+      "weather": {
+        "enabled": true,
+        "latitude": 35.68,
+        "longitude": 139.76,
+        "timezone": "Asia/Tokyo"
+      },
+      "places": {
+        "enabled": true,
+        "limit": 4
+      },
+      "signature": true,
+      "aiImage": {
+        "provider": "pollinations",
+        "baseUrl": "",
+        "apiKey": "",
+        "model": "flux",
+        "size": "1024x1024",
+        "promptPrefix": "",
+        "width": 768,
+        "height": 768
+      }
+    },
     "nightSticker": {
       "enabled": false,
       "at": "23:00",

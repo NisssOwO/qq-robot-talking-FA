@@ -30,6 +30,11 @@ import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } fro
 import { hardenDir, manualDirCommand } from './state-acl.mjs';
 import { QuietHours } from './quiet-hours.mjs';
 import * as diaryLib from './memory-diary.mjs';
+import { llmThinkingBody } from './llm-params.mjs';
+import { DEFAULT_QZONE_PROMPT, QZONE_PLACEHOLDERS, effectiveTemplate, normalizeTemplate, renderQzonePrompt } from './qzone-prompt.mjs';
+import { HOOK_LIMIT, HOOK_MIN_SCORE, collectChatHooks, collectDiaryHooks, collectHooks, formatHookBlock, hookSourceLabel, hookSummary, signatureOf } from './qzone-hook.mjs';
+import { createWeatherClient, clockText, hourInZone, monthInZone, periodOf, startOfDay, weatherLine, weatherRule } from './qzone-weather.mjs';
+import { NONE_PLACE_LABEL, buildPlaceBlock, loadPlacePool, pickPlaces, slotOfHour, verifyPlace } from './qzone-places.mjs';
 import { buildWorldPrompt } from './world-prompt.mjs';
 import { synthesizeFish, TtsError, saveTtsAudio, measureSeconds, estimateMp3Seconds } from './tts-fish.mjs';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
@@ -689,6 +694,22 @@ function redactSensitiveText(text) {
 // 防止底层网关把文本中的 [CQ: 当作 CQ 码解析：替换为全角冒号。
 function escapeCqText(text) {
   return String(text ?? '').replace(/\[CQ:/gi, '[CQ：');
+}
+
+/**
+ * 模型有时把换行写成字面量「\n」（反斜杠 + n，两个字符）塞进工具参数，
+ * 结果 QQ 里就看到一行里的 \n\n，而不是分段。这一步把它们还原成真换行。
+ *
+ * 只在发出去的最后一步做（onebotSend），所以手动发送、自动转发、重复读回
+ * 的历史文本都不受影响；QQ 里想把 \n 当字面量展示的场景极少，代价可接受。
+ */
+function unescapeLiteralEscapes(text) {
+  const raw = String(text ?? '');
+  if (!raw.includes('\\')) return raw;
+  return raw
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\n');
 }
 
 // 兼容模型把单条消息序列化成 JSON 字符串的情况，例如 "\"你好\"" → "你好"。
@@ -5228,7 +5249,7 @@ async function main() {
           st.proactiveManualAt = Date.now();
           saveSocialV2State();
           log(`[reserved2] 手动主动搭话：${key}${force ? '（静默时段强发）' : ''}`);
-          void sendWakePromptV2(key, 'proactiveCheck').catch((error) => log(`[reserved2] 手动主动搭话唤醒异常 ${key}:`, error?.message ?? error));
+          void sendWakePromptV2(key, 'proactiveCheck', { forceQuiet: force }).catch((error) => log(`[reserved2] 手动主动搭话唤醒异常 ${key}:`, error?.message ?? error));
           sendJson({ ok: true, woke: true });
           return;
         }
@@ -5239,7 +5260,22 @@ async function main() {
         }
         if (req.method === 'POST' && url.pathname === '/api/qzone/config') {
           const body = await readBody();
-          const next = { ...(cfg.socialV2?.qzone ?? {}), ...(body ?? {}) };
+          // 提示词统一归一：非字符串/空白 → ''（= 用默认），超长截断。别让面板塞进奇怪类型，
+          // 否则下一次渲染时 String() 出一堆 [object Object] 直接发给模型。
+          if (body && Object.prototype.hasOwnProperty.call(body, 'prompt')) {
+            body.prompt = normalizeTemplate(body.prompt);
+          }
+          const prevQ = cfg.socialV2?.qzone ?? {};
+          const next = { ...prevQ, ...(body ?? {}) };
+          // weather / places / aiImage 是嵌套对象：只传一半时不能被整个替换掉，
+          // 否则面板只改了个开关，坐标或 key 就没了。
+          for (const key of ['weather', 'places', 'aiImage']) {
+            const patch = body?.[key];
+            if (patch && typeof patch === 'object' && !Array.isArray(patch)) {
+              const base = prevQ[key] && typeof prevQ[key] === 'object' && !Array.isArray(prevQ[key]) ? prevQ[key] : {};
+              next[key] = { ...base, ...patch };
+            }
+          }
           if (!cfg.socialV2) cfg.socialV2 = {};
           cfg.socialV2.qzone = next;
           const configFile = path.join(ROOT, 'config.json');
@@ -5306,7 +5342,7 @@ async function main() {
           qzoneState.manualUntil = Date.now() + 5 * 60000;
           saveQzoneState();
           log(`[qzone] 面板手动触发：唤醒模型写说说（${key}）`);
-          void sendWakePromptV2(key, 'qzoneCheck').catch((error) => log('[qzone] 唤醒失败：' + (error?.message ?? error)));
+          void sendWakePromptV2(key, 'qzoneCheck', { forceQuiet: force }).catch((error) => log('[qzone] 唤醒失败：' + (error?.message ?? error)));
           sendJson({ ok: true, woke: true, key });
           return;
         }
@@ -5817,6 +5853,14 @@ async function main() {
             sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403);
             return;
           }
+          // 静默时段：手动唤醒也要说清楚被挡住了，并允许操作者显式强发（force）。
+          const force = body?.force === true;
+          const quietNow = quietHours.status();
+          if (!force && quietNow.state && quietNow.state !== 'normal') {
+            const until = quietNow.until ? '（' + new Date(quietNow.until).toLocaleTimeString('zh-CN', { hour12: false }) + ' 结束）' : '';
+            sendJson({ ok: false, code: 'quiet', error: '现在是静默时段' + until + '，要发请勾上「静默时段也发」' }, 409);
+            return;
+          }
           const st = getSocialV2State(key);
           if (st.pendingWakeTimer) {
             clearTimeout(st.pendingWakeTimer);
@@ -5833,8 +5877,8 @@ async function main() {
           // 等一个可能卡几十秒的模型回合），但必须挂 catch。裸调用一旦 reject 就是
           // unhandledRejection：Node 会打警告甚至按配置退出进程，而 HTTP 那边已经回了 {ok:true}，
           // 表面上"唤醒成功"，实际上谁也不知道它失败了。
-          void sendWakePromptV2(key, effectiveReason).catch((error) => log(`[reserved2] 手动唤醒异常 ${key}:`, error?.message ?? error));
-          log(`控制台：手动唤醒 ${key}（${effectiveReason}${firstWake && reason !== effectiveReason ? `，首次唤醒，请求原因 ${reason} 已升级为 bootstrap` : ''}）`);
+          void sendWakePromptV2(key, effectiveReason, { forceQuiet: force }).catch((error) => log(`[reserved2] 手动唤醒异常 ${key}:`, error?.message ?? error));
+          log(`控制台：手动唤醒 ${key}（${effectiveReason}${force ? '，静默时段强发' : ''}${firstWake && reason !== effectiveReason ? `，首次唤醒，请求原因 ${reason} 已升级为 bootstrap` : ''}）`);
           sendJson({ ok: true, key, reason: effectiveReason, requestedReason: reason, firstWake });
           return;
         }
@@ -8529,7 +8573,7 @@ async function main() {
       if (!/^\d+$/.test(at)) throw new Error('atUserId 必须是正整数 QQ 号，且不能为 all');
       segments.push({ type: 'at', data: { qq: at } });
     }
-    const rawMessage = String(message ?? '');
+    const rawMessage = unescapeLiteralEscapes(String(message ?? ''));
     const hasKnownToken = [...KNOWN_AGENT_TOKENS].some((t) => t && rawMessage.includes(t));
     if (hasKnownToken) {
       log(`发送内容包含会话令牌，已阻止发送 (${kind}:${id})`);
@@ -9008,6 +9052,8 @@ async function main() {
   function sendMessagesV2(key, messages, delays, replyToMessageId, atUserId = null) {
     const assertSendAllowed = captureSendGuard(key);
     const [kind, id] = key.split(':');
+    // 字面量 \n 还原成真换行：既让 QQ 里正常分段，也保证存进最近对话的内容是干净的。
+    messages = (Array.isArray(messages) ? messages : []).map((m) => unescapeLiteralEscapes(m));
     const sent = [];
     const failed = [];
     for (let i = 0; i < messages.length; i++) {
@@ -10033,7 +10079,8 @@ async function main() {
           messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
           temperature: 0.9,
           max_tokens: maxTokens,
-          stream: false
+          stream: false,
+          ...llmThinkingBody(lc)
         }),
         signal: ac.signal
       });
@@ -11845,32 +11892,55 @@ async function main() {
       const conf = qzoneConf();
       const withImage = conf.imageMode !== 'none';
       const picked = conf.contentModes[Math.floor(Math.random() * conf.contentModes.length)];
+      // pillar 从 1.2 起不再是「内容要求」，只留作 HUD/统计，说明这条大概写了哪一类。
       const pillar = pickQzonePillar();
       qzoneState.pendingPillar = pillar.id;
-      const slot = String(qzoneState.nextTag ?? '') || '这会儿';
+      // 由头/钟点/天气/地点是 tick 里算好的（要联网取天气，同步的拼装路径不能等它）。
+      const tz = conf.weather.timezone || 'Asia/Tokyo';
+      const ctx = qzoneTakeContext(key) ?? {
+        hooks: [],
+        hookBlock: '',
+        clock: clockText(Date.now(), tz),
+        slot: periodOf(Date.now(), tz),
+        weather: null,
+        weatherLine: '',
+        weatherRule: weatherRule(null),
+        places: [],
+        placeBlock: ''
+      };
+      qzoneState.pendingHook = ctx.hooks?.[0]
+        ? { text: String(ctx.hooks[0].text).slice(0, 120), source: String(ctx.hooks[0].source ?? ''), score: Number(ctx.hooks[0].score) || 0 }
+        : null;
+      qzoneState.pendingClock = String(ctx.clock ?? '');
+      const slot = ctx.slot || String(qzoneState.nextTag ?? '') || '这会儿';
       const history = Array.isArray(qzoneState.history) ? qzoneState.history : [];
       const recentBlock = history.length
         ? '【最近已经发过的，别再写】\n' + history.slice(-3).map((h, i) => (i + 1) + '. ' + String(h.text).replace(/\s+/g, ' ').slice(0, 120)).join('\n') + '\n这一条必须换一件完全不同的事：换场景、换时间、换心情。哪怕季节一样，也不要再写同一件东西（比如连着写金木犀、连着写邮局）。\n'
         : '';
-      return `${base}【发一条空间说说】${key}
-原因：到点了，你想在自己的 QQ 空间发一条说说。这一轮不是回消息，也不是跟谁说话。
-
-【写什么】
-${recentBlock}
-- 用「日语原文 + 中文字幕」两段式：先写日语（三十到八十字），换行再写这一段的中文。
-- 两段都是正文，不要加「日语」「中文」这类标签，不要括号，不要用 markdown。
-- 口吻像在手机备忘录里随手记一笔。
-- 现在大概是${slot}。写得像这个时间点会有的心情（早上是赶、中午是饿、傍晚是松下来、夜里是安静）。
-- 这次写什么：${picked === 'topic' ? '（「接群里的茬」）把你最近看到的、大家聊过的某个话题，写成你自己的感受——但**不要提具体是谁说的、也不要复述原话**，只留那点情绪。' : '（「写自己」）这一条只写：' + pillar.text + '。'}
-- **必须带一个具体的东西**：地点、物品名、吃的东西、数字、时间里的至少一个。写「今天有点累」不合格，写「排练室的空调坏了，练到一半全是汗」合格。
-- **结尾不许感慨**：不要用「真好」「治愈」「感慨」「真好呢」这类词收尾，也不要总结一句道理。说完那件事就停。
-- **不许**出现：问候语（早安/晚安/在吗）、"今天也要加油"这类打气话、AI 自我指涉、"作为一个…"、任何括号旁白。
-- **不许**提群友、提 QQ、提"刚才有人跟我说"。
-- 不要编世界观里没写的剧情，不要写别的偶像做了什么。
-
-【怎么发】
-调用 qq_post_qzone：第一个参数 content 是正文；第二个参数 imagePrompt 是一句英文画面描述${withImage ? '（这次配图模式是 ' + conf.imageMode + '，会按这句描述出图）' : '（这次不配图，可以留空）'}。
-发完就安静收尾（qq_mark_read 或 qq_set_wake_config），不要在群里额外说一句"我刚发了说说"。`;
+      // 这一段以前是写死的（改一句口吻就要改代码+重新打包）。现在抽到
+      // src/qzone-prompt.mjs 里做成模板：config.json 的 socialV2.qzone.prompt 可改可存，
+      // 留空就用默认（work/test-qzone-prompt.mjs 守着结构）。
+      const modeNote = picked === 'topic'
+        ? '（「接群里的茬」）把你最近看到的、大家聊过的某个话题，写成你自己的感受——但**不要提具体是谁说的、也不要复述原话**，只留那点情绪。'
+        : '（「写自己」）偏重：' + pillar.text + '。但**只写上面那件真事**，把它归到这一类里说，不要另起一件。';
+      const imageHint = withImage
+        ? `（这次配图模式是 ${conf.imageMode}，会按这句描述出图）`
+        : '（这次不配图，可以留空）';
+      const hookBlock = ctx.hookBlock
+        || '- none｜今天没有特别的事。那就只写此刻眼前看得见的一件具体的东西（窗、灯、桌上放的什么），不要编一件没发生的事。';
+      return `${buildQzoneBase(key)}${renderQzonePrompt(conf.prompt, {
+        key,
+        hook: hookBlock,
+        clock: ctx.clock,
+        slot,
+        weatherLine: ctx.weatherLine,
+        weatherRule: ctx.weatherRule,
+        placeBlock: ctx.placeBlock || `- none｜${NONE_PLACE_LABEL}`,
+        recentBlock,
+        modeNote,
+        imageMode: conf.imageMode,
+        imageHint
+      })}`;
     }
     if (reason === 'poke') {
       return `${base}【唤醒】${key}\n原因：有人拍了一拍（可能拍了你，也可能拍了别人）。\n先看未读/最近消息里的 [拍一拍] 事件：如果是拍你，可以自然回应一句，也可以用 qq_send_poke 回一个拍一拍；如果是拍别人，觉得有趣也可以接梗。除了回应，偶尔也可以主动戳一下正在聊的人/熟人，像真人手贱/提醒/逗一下，但别频繁。不想接就安静收尾（qq_mark_read 或 qq_set_wake_config）。`;
@@ -11888,13 +11958,20 @@ ${recentBlock}
     return `${roleLine}${identityLine}${tokenLine}【提醒】你还没有完成回合收尾。请调用 qq_set_wake_config 设置下一次唤醒条件（例如继续潜水多久、@/名字/关键词/提问/概率/指定成员等），或者调用 qq_mark_read 表示你看过且决定不接。这是为了防止你忘记收尾后进入“永眠”。注意：设置潜水前先用 qq_wait_for_messages(timeoutMs=${preSleepMs}) 完成沉睡前观察；等待期间有人说话时查看 newMessages，判断不需要你参与即可收尾。`;
   }
 
-  async function sendWakePromptV2(key, reason) {
+  async function sendWakePromptV2(key, reason, options = {}) {
+    // forceQuiet：操作者在面板上明确勾了「静默时段也发」。静默闸门是给自动行为用的，
+    // 手动触发既然已经越过路由层的检查，这里就不能再拦一次（否则面板说"已触发"、
+    // 日志却写"静默期不投递"，用户永远等不到消息）。
+    const forceQuiet = options?.forceQuiet === true;
     if (cfg.socialV2?.enabled === false) return;
     if (currentMode !== 'reserved2' || socialV2.paused) return;
-    if (quietPauseProactive() && !quietHours.isOwnerException(key)) {
+    if (!forceQuiet && quietPauseProactive() && !quietHours.isOwnerException(key)) {
       quietHours.noteSuppressed();
       log(`[quiet] 静默期不投递唤醒 ${key}（${reason}）`);
       return;
+    }
+    if (forceQuiet && quietPauseProactive()) {
+      log(`[quiet] 手动强发，跳过静默闸门 ${key}（${reason}）`);
     }
     if (!isSessionAllowedInCurrentMode(key)) {
       log(`[reserved2] 跳过唤醒 ${key}（${reason}）：会话已不在当前模式允许范围内`);
@@ -12200,6 +12277,38 @@ ${recentBlock}
         return Number.isFinite(n) ? Math.min(0.9, Math.max(0, n)) : 0.3;
       })(),
       imageMode: ['none', 'sticker', 'ai', 'random'].includes(raw.imageMode) ? raw.imageMode : 'none',
+      // 发说说时给模型的那段指令：面板可改，存 config.json；空 = 用默认。
+      prompt: normalizeTemplate(raw.prompt),
+      promptIsDefault: normalizeTemplate(raw.prompt) === '',
+      // ── 1.2 新增：由头与「此刻」 ─────────────────────────────────────
+      // 没有由头就不发：这是治「原因不明」的主开关（关掉就退回 1.1 的「到点了随便写」）。
+      requireHook: raw.requireHook !== false,
+      hookSources: (() => {
+        const raw2 = Array.isArray(raw.hookSources) ? raw.hookSources : [];
+        const ok = raw2.filter((s) => s === 'chat' || s === 'diary');
+        return ok.length ? Array.from(new Set(ok)) : ['chat', 'diary'];
+      })(),
+      hookMinScore: int(raw.hookMinScore, 0, 10, HOOK_MIN_SCORE),
+      // 天气：Open-Meteo 免 key，坐标默认东京（跟着角色世界观）。取不到就不提天气。
+      weather: {
+        enabled: raw.weather?.enabled !== false,
+        latitude: (() => {
+          const n = Number(raw.weather?.latitude);
+          return Number.isFinite(n) ? n : 35.68;
+        })(),
+        longitude: (() => {
+          const n = Number(raw.weather?.longitude);
+          return Number.isFinite(n) ? n : 139.76;
+        })(),
+        timezone: String(raw.weather?.timezone ?? 'Asia/Tokyo')
+      },
+      // 落款行（📍地点 ☀ 18℃）：关掉就只写纯文字，不验证也不补。
+      signature: raw.signature !== false,
+      // 地点池：默认开；数据文件坏了会自动退化成「哪儿都没去」，不用改配置。
+      places: {
+        enabled: raw.places?.enabled !== false,
+        limit: int(raw.places?.limit, 1, 6, 4)
+      },
       aiImage: {
         provider: raw.aiImage?.provider === 'openai-compatible' ? 'openai-compatible' : 'pollinations',
         baseUrl: String(raw.aiImage?.baseUrl ?? ''),
@@ -12221,6 +12330,168 @@ ${recentBlock}
       qzoneState.count = 0;
     }
     return Number(qzoneState.count ?? 0);
+  }
+
+  // ── 「此刻」上下文：由头 + 钟点 + 天气 + 地点 ────────────────────────
+  // 治「原因不明」的核心：一条说说在生成之前，先确定它**为什么发**（今天真实发生的一件小事）、
+  // **几点发**（分钟级钟点）、**外面什么样**（真实天气）。模型只负责把这件事说成她的口吻。
+  // 没由头就不发——这一条由 runQzoneTick 判断（requireHook）。
+  let qzoneWeatherClient = null;
+  let qzoneWeatherSig = '';
+  let qzonePending = null; // { key, at, ctx }：tick 里算一次，拼提示词时直接取，别在同步函数里再算
+
+  function qzoneGetWeather(conf) {
+    const w = conf.weather;
+    const sig = `${w.enabled}|${w.latitude}|${w.longitude}|${w.timezone}`;
+    if (!qzoneWeatherClient || qzoneWeatherSig !== sig) {
+      qzoneWeatherClient = createWeatherClient({ log });
+      qzoneWeatherSig = sig;
+    }
+    return qzoneWeatherClient.get(w);
+  }
+
+  // 地点池：只在第一次用时读一遍；文件坏了只关掉地点功能，不影响发说说本身。
+  let qzonePlacePoolCache = null;
+  let qzonePlacePoolTried = false;
+
+  function qzonePlacePool() {
+    if (qzonePlacePoolTried) return qzonePlacePoolCache;
+    qzonePlacePoolTried = true;
+    try {
+      const file = path.join(ROOT, 'resources', 'qzone-places.json');
+      const pool = loadPlacePool(JSON.parse(fs.readFileSync(file, 'utf8')));
+      if (!pool.ok) {
+        log(`[qzone] 地点池校验失败，已关掉地点功能：${pool.errors.slice(0, 3).join('；')}`);
+        qzonePlacePoolCache = null;
+      } else {
+        qzonePlacePoolCache = pool;
+        log(`[qzone] 地点池就绪：${pool.places.length} 条`);
+      }
+    } catch (error) {
+      log(`[qzone] 读地点池失败，已关掉地点功能：${error?.message ?? error}`);
+      qzonePlacePoolCache = null;
+    }
+    return qzonePlacePoolCache;
+  }
+
+  /** 最近 N 天在说说里写过的地点 id（history 只留 5 条，所以这是尽力而为的去重）。 */
+  function qzoneRecentPlaceIds(days = 30) {
+    const history = Array.isArray(qzoneState.history) ? qzoneState.history : [];
+    const since = Date.now() - days * 86400000;
+    const ids = [];
+    for (const h of history) {
+      const p = h?.place;
+      if (p?.id && Number(h?.at ?? 0) >= since) ids.push(String(p.id));
+    }
+    return ids;
+  }
+
+  /** 最近发过的说说签名：避免这次又挑到同一件事。 */
+  function qzoneRecentSignatures() {
+    const history = Array.isArray(qzoneState.history) ? qzoneState.history : [];
+    return new Set(history.slice(-5).map((h) => signatureOf(String(h?.text ?? ''))).filter(Boolean));
+  }
+
+  /**
+   * 汇总这次发说说要用的上下文。天气失败只影响「天气」一项，不阻塞发布。
+   * @returns {Promise<{hooks:Array, hookBlock:string, clock:string, slot:string, weather:object|null, weatherLine:string, weatherRule:string, placeBlock:string}>}
+   */
+  async function qzoneBuildContext(key, confIn) {
+    const conf = confIn ?? qzoneConf();
+    const now = Date.now();
+    const tz = conf.weather.timezone || 'Asia/Tokyo';
+    const dayStart = startOfDay(now, tz);
+    const slot = periodOf(now, tz);
+    const clock = clockText(now, tz);
+    const weather = await qzoneGetWeather(conf);
+    const exclude = qzoneRecentSignatures();
+    const sources = conf.hookSources;
+    let chat = [];
+    let diary = [];
+    if (sources.includes('chat')) {
+      try {
+        const st = getSocialV2State(key);
+        chat = collectChatHooks({
+          messages: st.recentMessages,
+          dayStart,
+          minScore: conf.hookMinScore,
+          limit: HOOK_LIMIT,
+          excludeSignatures: exclude
+        });
+      } catch (error) {
+        log(`[qzone] 读群聊由头失败 ${key}：${error?.message ?? error}`);
+      }
+    }
+    if (sources.includes('diary')) {
+      try {
+        const c = diaryCfg();
+        const today = diaryLib.dayKey(now, c.daily.timezone);
+        const days = await diaryStore.listDays(diaryScopeKey(key), { months: 4 });
+        const picked = diaryLib.pickInjectable(days, {
+          days: Math.max(1, Number(c.injectDays) || 3),
+          maxChars: 1500,
+          today
+        });
+        diary = collectDiaryHooks({ picked, minScore: conf.hookMinScore, limit: HOOK_LIMIT, excludeSignatures: exclude });
+      } catch (error) {
+        log(`[qzone] 读日记由头失败 ${key}：${error?.message ?? error}`);
+      }
+    }
+    const hooks = collectHooks({ chat, diary, sources, limit: HOOK_LIMIT, excludeSignatures: exclude });
+    // 地点候选：全是「她今天可能去了哪」，抽不到就明确给「哪儿都没去」。
+    let places = [];
+    let placeBlock = `- none｜${NONE_PLACE_LABEL}`;
+    if (conf.places.enabled) {
+      const pool = qzonePlacePool();
+      if (pool?.ok) {
+        try {
+          places = pickPlaces({
+            places: pool.places,
+            weatherKind: weather?.kind ?? '',
+            month: monthInZone(now, tz),
+            slot: slotOfHour(hourInZone(now, tz)),
+            recentIds: qzoneRecentPlaceIds(30),
+            limit: conf.places.limit
+          });
+          placeBlock = buildPlaceBlock(places);
+        } catch (error) {
+          log(`[qzone] 挑地点失败，这次不带地点：${error?.message ?? error}`);
+          places = [];
+          placeBlock = `- none｜${NONE_PLACE_LABEL}`;
+        }
+      }
+    }
+    return {
+      hooks,
+      hookBlock: formatHookBlock(hooks, { maxLines: HOOK_LIMIT }),
+      clock,
+      slot,
+      weather,
+      weatherLine: weatherLine(weather),
+      weatherRule: weatherRule(weather),
+      places,
+      placeBlock
+    };
+  }
+
+  /** 取 tick 里算好的上下文（过期就丢掉，重新算也不值当，除非确实过期）。 */
+  function qzoneTakeContext(key, maxAgeMs = 15 * 60000) {
+    if (!qzonePending) return null;
+    if (qzonePending.key !== key) return null;
+    if (Date.now() - qzonePending.at > maxAgeMs) return null;
+    return qzonePending.ctx;
+  }
+
+  /**
+   * 发说说专用的底噪——**不拼聊天用的那段 base**。
+   * 聊天人格里的「反 AI」「参与」「催睡」「口头禅」「别复读」都是「对某个人说话」的规则，
+   * 套在对外广播上会把句子稀释成「安全但空」。这里只保留：她是谁、令牌、这轮不是聊天。
+   */
+  function buildQzoneBase(key) {
+    const roleState = readRoleState();
+    const roleLine = roleState.role ? `【当前角色】${roleState.role}（完整角色卡请调用 qq_get_prompt 查看）\n` : '';
+    const st = getSocialV2State(key);
+    return `${roleLine}${selfIdentityTextV2()}【当前会话】${key}\n【会话令牌】${st.agentToken}（工具里的 key 参数一律填这个值）\n【这一轮不是聊天】没有人在等你回话。这条说说写给你自己看，发出去之后不要在群里补一句「我刚发了说说」。\n\n`;
   }
 
   // 从收藏表情里随机挑一张；失败返回 null，由调用方决定退回纯文字
@@ -12287,7 +12558,27 @@ ${recentBlock}
     qzoneState.lastText = content.slice(0, 200);
     // 留最近 5 条，下一轮写的时候要避开——不然老写同一件事（比如秋天就永远金木犀）。
     qzoneState.history = Array.isArray(qzoneState.history) ? qzoneState.history : [];
-    qzoneState.history.push({ text: content.slice(0, 300), at: Date.now(), pillar: String(qzoneState.pendingPillar ?? '') });
+    const pendHook = qzoneState.pendingHook && typeof qzoneState.pendingHook === 'object' ? qzoneState.pendingHook : null;
+    // 落款行：模型把地点写在正文末行，我们只在后台核对它有没有对上候选（对不上也照发，只记下来）。
+    const placeCands = Array.isArray(qzonePending?.ctx?.places) ? qzonePending.ctx.places : [];
+    const placeHit = verifyPlace(content, placeCands);
+    if (placeHit.found && !placeHit.place) {
+      log(`[qzone] 落款地点「${placeHit.name}」不在本次候选里（候选 ${placeCands.length} 个）`);
+    }
+    qzoneState.history.push({
+      text: content.slice(0, 300),
+      at: Date.now(),
+      pillar: String(qzoneState.pendingPillar ?? ''),
+      // 记下这条是「因为什么」发的：面板和日志里能追溯，也方便判断由头是不是在重复。
+      hook: pendHook ? String(pendHook.text ?? '').slice(0, 120) : '',
+      hookSource: pendHook ? String(pendHook.source ?? '') : '',
+      clock: String(qzoneState.pendingClock ?? ''),
+      // 地点只记 id + 名字：30 天去重靠它，「哪儿都没去」不记账。
+      place: placeHit.place ? { id: placeHit.place.id, name: placeHit.place.name } : null,
+      placeWritten: placeHit.found ? String(placeHit.name ?? '') : ''
+    });
+    qzoneState.pendingHook = null;
+    qzoneState.pendingClock = '';
     if (qzoneState.history.length > 5) qzoneState.history = qzoneState.history.slice(-5);
     qzoneState.lastError = '';
     saveQzoneState();
@@ -12298,8 +12589,15 @@ ${recentBlock}
   function qzoneStatus() {
     const conf = qzoneConf();
     const quiet = quietHours.status();
+    const history = Array.isArray(qzoneState.history) ? qzoneState.history : [];
+    const lastRec = history.length ? history[history.length - 1] : null;
     return {
       conf,
+      // 提示词：给出默认全文 + 占位符说明，面板据此做「恢复默认」和填写提示。
+      promptDefault: DEFAULT_QZONE_PROMPT,
+      promptEffective: effectiveTemplate(conf.prompt),
+      promptIsDefault: conf.promptIsDefault,
+      promptPlaceholders: QZONE_PLACEHOLDERS.map((p) => ({ key: p.key, desc: p.desc })),
       today: qzoneTodayCount(),
       lastAt: Number(qzoneState.lastAt ?? 0),
       lastText: String(qzoneState.lastText ?? ''),
@@ -12307,7 +12605,35 @@ ${recentBlock}
       nextAt: Number(qzoneState.nextAt ?? 0),
       nextTag: String(qzoneState.nextTag ?? ''),
       quiet: quiet.state !== 'normal',
-      quietUntil: quiet.until ?? null
+      quietUntil: quiet.until ?? null,
+      // 可观测：上一条是「因为什么」发的 + 地点池状态 + 这一次算出来的上下文（面板用来显示）。
+      lastHook: String(lastRec?.hook ?? ''),
+      lastHookSource: String(lastRec?.hookSource ?? ''),
+      lastClock: String(lastRec?.clock ?? ''),
+      lastPlace: lastRec?.place?.name ? String(lastRec.place.name) : String(lastRec?.placeWritten ?? ''),
+      recent: history.slice(-5).map((h) => ({
+        at: Number(h?.at ?? 0),
+        text: String(h?.text ?? '').slice(0, 160),
+        hook: String(h?.hook ?? ''),
+        hookSource: String(h?.hookSource ?? ''),
+        clock: String(h?.clock ?? ''),
+        place: h?.place?.name ? String(h.place.name) : '',
+        placeWritten: String(h?.placeWritten ?? '')
+      })),
+      places: (() => {
+        const pool = qzonePlacePool();
+        return { enabled: conf.places.enabled !== false, ready: !!pool, count: pool ? pool.places.length : 0 };
+      })(),
+      pending: qzonePending
+        ? {
+            at: Number(qzonePending.at ?? 0),
+            hooks: (qzonePending.ctx?.hooks ?? []).length,
+            hook: String(qzonePending.ctx?.hooks?.[0]?.text ?? '').slice(0, 120),
+            clock: String(qzonePending.ctx?.clock ?? ''),
+            weather: qzonePending.ctx?.weather ? String(qzonePending.ctx.weather.text ?? '') : '',
+            places: (qzonePending.ctx?.places ?? []).map((p) => String(p.name))
+          }
+        : null
     };
   }
 
@@ -12335,6 +12661,23 @@ ${recentBlock}
     qzoneTimer.unref?.();
     const at = new Date(qzoneState.nextAt).toLocaleString('zh-CN', { hour12: false }).slice(5, 16);
     log(`[qzone] 下一次说说排在${tag}（${at}，还有 ${Math.round(delay / 60000)} 分钟）`);
+  }
+
+  // 「这一轮没由头」时的排期：别在同一个窗口里刚跳过、几十秒后又来一遍。
+  // 直接按「20 分钟之后」去算下一个窗口，当天由头可能在后面才出现（群聊活跃起来了）。
+  function scheduleNextQzoneAfterSkip(conf) {
+    if (qzoneTimer) { clearTimeout(qzoneTimer); qzoneTimer = null; }
+    if (!conf.enabled) return;
+    const notBefore = Date.now() + 20 * 60000;
+    const win = qzoneNextWindow(notBefore);
+    const delay = Math.max(win.at - Date.now(), 20 * 60000);
+    qzoneState.nextAt = Date.now() + delay;
+    qzoneState.nextTag = win.tag;
+    saveQzoneState();
+    qzoneTimer = setTimeout(() => { qzoneTimer = null; void runQzoneTick(); }, delay);
+    qzoneTimer.unref?.();
+    const at = new Date(qzoneState.nextAt).toLocaleString('zh-CN', { hour12: false }).slice(5, 16);
+    log(`[qzone] 没由头，下一次再试排在${win.tag}（${at}，还有 ${Math.round(delay / 60000)} 分钟）`);
   }
 
   async function runQzoneTick() {
@@ -12371,6 +12714,34 @@ ${recentBlock}
     const key = [ownerKey, groupKey].find((k) => k && isSessionAllowedInCurrentMode(k)) || '';
     if (!key) {
       log('[qzone] 没有可用的会话（白名单为空），跳过');
+      scheduleNextQzone(conf);
+      return;
+    }
+    log(`[qzone] 到点，准备写一条说说（${key}）`);
+    // 先把「为什么发 / 几点 / 什么天气 / 在哪」备齐再唤醒：没有由头就不唤醒（省一次模型调用）。
+    let ctx = null;
+    try {
+      ctx = await qzoneBuildContext(key, conf);
+    } catch (error) {
+      log(`[qzone] 准备上下文失败：${error?.message ?? error}`);
+    }
+    if (conf.requireHook && !ctx?.hookBlock) {
+      log('[qzone] 今天还没有可写的由头（群聊与日记都没挑到具体小事），这一轮不发，排下一个窗口');
+      qzoneState.lastError = 'no-hook';
+      saveQzoneState();
+      scheduleNextQzoneAfterSkip(conf);
+      return;
+    }
+    qzonePending = { key, at: Date.now(), ctx };
+    if (process.env.QZONE_DRY_RUN === '1') {
+      // 只打印提示词，不唤醒模型、不发布。用来肉眼检查「这一条到底为什么发」。
+      try {
+        const promptText = buildWakePromptV2(key, 'qzoneCheck');
+        console.log(`\n===== [qzone][dry-run] ${key} =====\n${promptText}\n===== /dry-run =====\n`);
+        log(`[qzone] dry-run：由头 ${ctx?.hooks?.length ?? 0} 条，天气 ${ctx?.weather?.text ?? '无'}，钟点 ${ctx?.clock ?? '-'}`);
+      } catch (error) {
+        console.log(`[qzone][dry-run] 拼提示词失败：${error?.message ?? error}`);
+      }
       scheduleNextQzone(conf);
       return;
     }
@@ -12723,6 +13094,19 @@ ${recentBlock}
       } else if (item.reason === 'proactiveCheck') {
         // 主动机会有周期性重排，错过一次可接受（也不该在回合结束时立刻补一刀）。
         log(`[reserved2] ${key} 繁忙期间的主动机会已过期，跳过补发`);
+      } else if (item.reason === 'bootstrap') {
+        // bootstrap 是「首次唤醒」的引导（二代协议说明 + 操作者背景）。它被塞进暂存队列时，
+        // bootstrapSent 早已置真；如果这个会话此前已经正常聊过，这次引导就没有意义，
+        // 再排一次只会凭空多一个回合（还会和提醒回合互相踩）。
+        // 但积压的消息仍要处理 —— 所以不丢，降级成一次普通的回复检查。
+        const guidedBefore = (Array.isArray(st.wakeTimes) ? st.wakeTimes.length : 0) > 1 || Number(st.lastAiReplyAt || 0) > 0;
+        if (guidedBefore) {
+          log(`[reserved2] ${key} 繁忙期间的首次引导已过期（此前已唤醒过），改排一次回复检查`);
+          scheduleReplyCheckV2(key);
+        } else {
+          log(`[reserved2] ${key} 补发繁忙期间积压的唤醒：${item.reason}`);
+          scheduleWakeV2(key, item.reason);
+        }
       } else {
         log(`[reserved2] ${key} 补发繁忙期间积压的唤醒：${item.reason}`);
         scheduleWakeV2(key, item.reason);
@@ -13768,9 +14152,19 @@ ${recentBlock}
               }
               // reserved2 防遗忘：每次唤醒回合结束时，若 AI 没有调用 qq_set_wake_config 设置下一次唤醒条件，
               // 则发送提醒；连续未设置达到上限后重置为默认唤醒配置。静默/后台提醒回合已在上方 continue，不触发。
-              if (pendingWakeKeys.has(key)) {
+              const hadPendingWake = pendingWakeKeys.has(key);
+              if (hadPendingWake) {
                 pendingWakeKeys.delete(key);
                 disarmPendingWakeLease(key);
+              }
+              // 繁忙期间被暂存的唤醒原因：当前 turn 结束后补一次（定时器类与消息类语义不同，
+              // 详见 replayPendingWakeReasonsV2 的注释）。
+              // 顺序很关键：必须夹在「清掉在途标记」之后、「未设置唤醒条件提醒」之前。
+              // 提醒分支会把 key 重新加回 pendingWakeKeys 并再投一个回合；补发若排在它后面，
+              // 就会立刻撞上自己刚留下的忙碌标记 —— 打出一对「补发 → 又暂存」的空转日志，
+              // 还会白白消耗一次唤醒额度（现场 73 次暂存里 68 次就是这么来的）。
+              replayPendingWakeReasonsV2(key);
+              if (hadPendingWake) {
                 if (wakeConfigUpdatedKeys.has(key) || markReadCalledKeys.has(key)) {
                   ensureWakeableV2(getSocialV2State(key), { key });
                   wakeConfigUpdatedKeys.delete(key);
@@ -13802,9 +14196,6 @@ ${recentBlock}
                   }
                 }
               }
-              // 繁忙期间被暂存的唤醒原因：当前 turn 结束后补一次（定时器类与消息类语义不同，
-              // 详见 replayPendingWakeReasonsV2 的注释）。
-              replayPendingWakeReasonsV2(key);
               if (ended.reason.kind === 'completed' && ended.text.trim()) {
                 const plain = mdToPlain(ended.text);
                 // 纯 Markdown/空白输出按“无文本”处理，避免后续 planSocialTimeline 拿空串崩溃。
