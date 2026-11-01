@@ -57,3 +57,11 @@ docs/LONG-MEMORY-TODO.md
 
 # 个人角色卡，不进仓库也不进发布包
 roles/芹泽朝日.*
+roles/樋口円香.*
+
+# 本地工作区与移植工作区：体积巨大、含本机路径与个人资料
+work/
+android-port/
+
+# 本地实施笔记：只留本机，不进仓库
+docs/QZONE-TODO.md

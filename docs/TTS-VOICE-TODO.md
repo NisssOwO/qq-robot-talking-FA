@@ -41,7 +41,7 @@
 - [x] 备份 `src/bridge.js`、`public/console.html`、`config.json`（带时间戳）→ `*.bak-20261019-223316`
 - [x] 建目录 `audio/tts/`（`voiceCfg().dir` = `path.resolve(ROOT, socialV2.voice.dir)`，默认 `ROOT/audio`；**不是** `state/audio`）
 
-> **落盘位置**：`F:\产出\shiny colors\audio\tts\tts-<时间戳>.mp3`。
+> **落盘位置**：`F:\work\shiny colors\audio\tts\tts-<时间戳>.mp3`。
 > 必须在 `voice.dir` 之内——AI 通道（`/api/socialV2/send-voice`）只允许库内文件，库外路径只有操作者通道能发。
 > 命名带 `tts-` 前缀，保留最近 20 个，超出自动删最旧。
 

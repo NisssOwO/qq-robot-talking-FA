@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const ROOT = 'F:/产出/shiny colors';
+const ROOT = 'F:/work/shiny colors';
 const SRC_CFG = path.join(ROOT, 'config.json');
 const DST_CFG = path.join(ROOT, 'dist/qq-bot/config.json');
 const SRC_STATE = path.join(ROOT, 'state');
