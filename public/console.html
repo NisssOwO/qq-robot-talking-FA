@@ -4192,7 +4192,18 @@ document.getElementById('v2StateView').addEventListener('click', viewV2State);
 document.getElementById('v2ForceWake').addEventListener('click', async () => {
   const key = document.getElementById('v2StateKey').value.trim();
   if (!key) { alert('请输入会话 key'); return; }
-  const r = await api('/api/socialV2/wake', 'POST', { key, reason: 'admin' });
+  let r = await api('/api/socialV2/wake', 'POST', { key, reason: 'admin' });
+  // 静默时段后端会明确回 409（以前是"已发送"但内部被静默闸门拦掉，看不出原因）。
+  // 这里问一句，确认了就带 force 强发。
+  if (!r.ok && r.code === 'quiet') {
+    if (!confirm((r.error || '现在是静默时段') + '\n\n仍要强发这一条吗？')) {
+      const msg = document.getElementById('v2ConfigMsg');
+      msg.textContent = '已取消（静默时段）';
+      msg.className = 'meta';
+      return;
+    }
+    r = await api('/api/socialV2/wake', 'POST', { key, reason: 'admin', force: true });
+  }
   const msg = document.getElementById('v2ConfigMsg');
   msg.textContent = r.ok ? '✅ 已发送唤醒' : ('❌ ' + (r.error || '失败'));
   msg.className = r.ok ? 'meta ok' : 'meta err';

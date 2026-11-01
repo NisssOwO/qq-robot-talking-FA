@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import * as official from '../src/official-channel.mjs';
 import { isQQNTPath, readQQNTRoot, pickQQNTPath } from '../src/qq-detect.mjs';
 import { writePort, portOf } from '../src/ports.mjs';
+import { normalizeThinking, THINKING_LEVELS } from '../src/llm-params.mjs';
 
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(APP_DIR, '..');
@@ -57,7 +58,9 @@ const DEFAULTS = {
     apiKey: '',
     maxTokens: 8000,
     temperature: 0.7,
-    timeoutMs: 180000
+    timeoutMs: 180000,
+    // 「思考程度」：auto = 不传参数（旧行为）；其余翻成 reasoning_effort 发给模型
+    thinking: 'auto'
   },
   snowluma: { wsUrl: 'ws://127.0.0.1:38001', httpUrl: 'http://127.0.0.1:38000', accessToken: '' },
   tts: { enabled: true, baseUrl: 'https://api.fish.audio', apiKey: '', model: 's2.1-pro-free' },
@@ -1298,6 +1301,10 @@ async function status() {
           hasKey: !!String(cfg.llm?.apiKey ?? '').trim(),
           model: cfg.llm?.model ?? '',
           baseUrl: cfg.llm?.baseUrl ?? '',
+          thinking: normalizeThinking(cfg.llm?.thinking),
+          temperature: cfg.llm?.temperature ?? '',
+          maxTokens: cfg.llm?.maxTokens ?? '',
+          thinkingLevels: THINKING_LEVELS,
           groups: cfg.allow?.groups ?? [],
           private: cfg.allow?.private ?? [],
           disabledGroups: cfg.allow?.disabled?.groups ?? [],
@@ -1617,6 +1624,13 @@ function mask(key) {
   return s.length <= 8 ? '••••' : `${s.slice(0, 4)}••••${s.slice(-4)}`;
 }
 
+// 数字输入统一过一道：NaN → 用 fallback，越界 → 夹到区间内。
+function clampNumber(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
 function parseList(raw) {
   return String(raw ?? '')
     .split(/[\s,，、;；]+/)
@@ -1633,7 +1647,12 @@ function mergeConfig(base, input) {
     ...prevLlm,
     protocol: String(input.protocol ?? prevLlm.protocol ?? DEFAULTS.llm.protocol),
     baseUrl: String(input.baseUrl ?? '').trim() || prevLlm.baseUrl || DEFAULTS.llm.baseUrl,
-    model: String(input.model ?? '').trim() || prevLlm.model || DEFAULTS.llm.model
+    model: String(input.model ?? '').trim() || prevLlm.model || DEFAULTS.llm.model,
+    // 这三个是「模型行为」旋钮：思考程度决定想不想、想多久，温度决定飘不飘，
+    // maxTokens 同时是思考 + 回答的总预算（思考多了回答会被截断）。
+    thinking: normalizeThinking(input.thinking ?? prevLlm.thinking ?? DEFAULTS.llm.thinking),
+    temperature: clampNumber(input.temperature ?? prevLlm.temperature ?? DEFAULTS.llm.temperature, 0, 2, DEFAULTS.llm.temperature),
+    maxTokens: Math.round(clampNumber(input.maxTokens ?? prevLlm.maxTokens ?? DEFAULTS.llm.maxTokens, 256, 32000, DEFAULTS.llm.maxTokens))
   };
   const key = String(input.apiKey ?? '').trim();
   if (key) next.llm.apiKey = key;

@@ -170,6 +170,7 @@ h1 { margin: 4px 0 4px; font-size: 21px; font-weight: 650; letter-spacing: -.2px
 .field .hint { font-size: 11.5px; color: var(--muted); opacity: .88; line-height: 1.55; }
 .field input { width: 100%; }
 .formgrid { display: grid; grid-template-columns: 1fr 1fr; }
+.formgrid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .formgrid .field { padding-bottom: 6px; }
 input[type=time] { font-family: inherit; font-size: 13px; color: var(--text); background: var(--surface);
   border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; width: 104px; }
@@ -927,6 +928,22 @@ modelView.innerHTML = head('MODEL / KEYS', '模型与密钥', '机器人要调�
       <div id="model-chips" class="chips"></div>
       <div class="hint">OpenAI 兼容接口都行：DeepSeek 官方、中转站、本地 vLLM。</div>
     </div>
+    <div class="formgrid three">
+      <div class="field">
+        <label>思考程度</label>
+        <select id="thinking">
+          <option value="auto">跟随接口默认</option>
+          <option value="none">不思考（最快）</option>
+          <option value="minimal">极浅</option>
+          <option value="low">浅</option>
+          <option value="medium">中</option>
+          <option value="high">深（最慢，想最多）</option>
+        </select>
+      </div>
+      <div class="field"><label>温度</label><input id="temperature" inputmode="decimal" placeholder="0.7" autocomplete="off"></div>
+      <div class="field"><label>最大输出 token</label><input id="maxTokens" inputmode="numeric" placeholder="8000" autocomplete="off"></div>
+    </div>
+    <div class="hint" id="thinking-hint">思考程度决定回复前要想多久：想得越多越慢，思考的 token 也算在「最大输出」里。闲聊建议「不思考」或「浅」（只对「直连模型 API」生效）。</div>
   </div>
 
   <div class="card">
@@ -1917,6 +1934,79 @@ qzoneView.innerHTML = head('QZONE', '空间', '到点让她自己发一条说说
     </section>
 
     <section class="card span2">
+      <div class="card-head"><div class="card-title">由头与此刻</div><span class="count">这一条为什么发</span></div>
+      <label class="opt">
+        <div><div class="opt-name">没有由头就不发</div><div class="opt-sub">当天没有可写的真事，这一轮直接跳过，排到下个窗口再试。</div></div>
+        <span class="switch"><input type="checkbox" id="qz-require-hook"></span>
+      </label>
+      <div class="formgrid">
+        <div class="field">
+          <label>由头从哪找</label>
+          <label class="choice" style="border:0;padding:4px 0">
+            <input type="checkbox" id="qz-hook-chat" checked>
+            <span class="choice-txt"><b>当天群聊</b>排除她自己和指令，只挑有具体细节的句子</span>
+          </label>
+          <label class="choice" style="border:0;padding:4px 0">
+            <input type="checkbox" id="qz-hook-diary" checked>
+            <span class="choice-txt"><b>记忆日记</b>前些天她自己记下来的事</span>
+          </label>
+          <div class="hint">两个都不勾 = 找不到由头，等于把「没有由头就不发」一直触发</div>
+        </div>
+        <div class="field">
+          <label>由头最低分</label>
+          <input type="number" id="qz-hook-score" min="0" max="10" step="1" placeholder="2">
+          <div class="hint">数字 / 地点 / 物品各 +2，动作 +1，纯情绪 −2；低于这个分的不算由头</div>
+        </div>
+        <div class="field">
+          <label>天气</label>
+          <label class="choice" style="border:0;padding:4px 0">
+            <input type="checkbox" id="qz-weather-on">
+            <span class="choice-txt"><b>取真实天气</b>Open-Meteo，免 key</span>
+          </label>
+          <div style="display:flex;gap:6px;margin-top:6px">
+            <input type="text" id="qz-weather-lat" placeholder="35.68" style="width:50%" autocomplete="off">
+            <input type="text" id="qz-weather-lon" placeholder="139.76" style="width:50%" autocomplete="off">
+          </div>
+          <div style="margin-top:6px"><input type="text" id="qz-weather-tz" placeholder="Asia/Tokyo" autocomplete="off" spellcheck="false"></div>
+          <div class="hint">取不到就不提天气，正文也不会乱猜冷热</div>
+        </div>
+        <div class="field">
+          <label>地点与落款</label>
+          <label class="choice" style="border:0;padding:4px 0">
+            <input type="checkbox" id="qz-places-on">
+            <span class="choice-txt"><b>给她地点候选</b>内置 60 处东京地点，按天气 / 季节 / 时段挑</span>
+          </label>
+          <label class="choice" style="border:0;padding:4px 0">
+            <input type="checkbox" id="qz-signature-on">
+            <span class="choice-txt"><b>末行落款</b>📍地名　☀ 18℃</span>
+          </label>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+            <span class="hint">每次给几个候选</span>
+            <input type="number" id="qz-places-limit" min="1" max="6" step="1" placeholder="4" style="width:90px">
+          </div>
+          <div class="hint">雨雪天只给室内，季节名所只在对应季节出现，30 天内写过的会避开</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card span2">
+      <div class="card-head">
+        <div class="card-title">发说说的提示词</div>
+        <span class="count" id="qz-prompt-state">默认</span>
+      </div>
+      <div class="field">
+        <label>每次到点，这段文字会交给模型</label>
+        <textarea id="qz-prompt" rows="14" spellcheck="false" style="width:100%;font-family:var(--mono,ui-monospace,Consolas,monospace);font-size:12.5px;line-height:1.75;resize:vertical"></textarea>
+        <div class="hint" id="qz-prompt-hint" style="white-space:pre-wrap"></div>
+      </div>
+      <div class="field-actions">
+        <button class="btn primary" id="qz-prompt-save" type="button">保存提示词</button>
+        <button class="btn mini" id="qz-prompt-reset" type="button">恢复默认</button>
+        <span class="hint">改完点保存，下一轮生效（不用重启）；内容与默认一模一样时按「默认」存，以后升级能跟着变。</span>
+      </div>
+    </section>
+
+    <section class="card span2">
       <div class="card-head"><div class="card-title">AI 生图</div><span class="count">配图选「AI 生成」时才用</span></div>
       <div class="field">
         <label>用哪个后端</label>
@@ -2022,6 +2112,22 @@ function qzFill(st) {
   if ($('qz-image')) $('qz-image').value = c.imageMode || 'none';
   if ($('qz-ugc')) $('qz-ugc').value = String(c.ugcRight ?? 4);
 
+  // 1.2：由头 / 天气 / 地点 / 落款
+  if ($('qz-require-hook')) $('qz-require-hook').checked = c.requireHook !== false;
+  const hs = Array.isArray(c.hookSources) && c.hookSources.length ? c.hookSources : ['chat', 'diary'];
+  if ($('qz-hook-chat')) $('qz-hook-chat').checked = hs.includes('chat');
+  if ($('qz-hook-diary')) $('qz-hook-diary').checked = hs.includes('diary');
+  if ($('qz-hook-score')) $('qz-hook-score').value = c.hookMinScore ?? 2;
+  const wc = c.weather || {};
+  if ($('qz-weather-on')) $('qz-weather-on').checked = wc.enabled !== false;
+  if ($('qz-weather-lat')) $('qz-weather-lat').value = wc.latitude ?? 35.68;
+  if ($('qz-weather-lon')) $('qz-weather-lon').value = wc.longitude ?? 139.76;
+  if ($('qz-weather-tz')) $('qz-weather-tz').value = wc.timezone || 'Asia/Tokyo';
+  const pc = c.places || {};
+  if ($('qz-places-on')) $('qz-places-on').checked = pc.enabled !== false;
+  if ($('qz-places-limit')) $('qz-places-limit').value = pc.limit ?? 4;
+  if ($('qz-signature-on')) $('qz-signature-on').checked = c.signature !== false;
+
   const ai = c.aiImage || {};
   const isOpenAi = ai.provider === 'openai-compatible';
   if ($('qz-ai-pollinations')) $('qz-ai-pollinations').checked = !isOpenAi;
@@ -2035,23 +2141,40 @@ function qzFill(st) {
   if ($('qz-ai-h')) $('qz-ai-h').value = ai.height ?? 768;
   if ($('qz-ai-mask')) $('qz-ai-mask').textContent = ai.apiKey ? '（已设置，留空不改）' : '（未设置）';
 
+  // 提示词：直接显示当前生效的全文（默认时就是默认文案）。保存时和默认逐字比对，
+  // 一样就按「默认」存（存空串），这样以后升级默认文案时不会被旧快照钉死。
+  qzPromptDefault = String(st.promptDefault ?? '');
+  if ($('qz-prompt')) $('qz-prompt').value = String(st.promptEffective ?? '');
+  if ($('qz-prompt-state')) $('qz-prompt-state').textContent = st.promptIsDefault ? '默认' : '已自定义';
+  if ($('qz-prompt-hint')) {
+    const list = Array.isArray(st.promptPlaceholders) ? st.promptPlaceholders : [];
+    $('qz-prompt-hint').textContent = '可用的占位符（发的时候会替换成当时的内容）：\n'
+      + list.map((p) => `{${p.key}}：${p.desc}`).join('\n')
+      + '\n认不出来的 {xxx} 原样保留，可以拿来写注释。';
+  }
+
   const led = $('qz-led');
   if (led) led.className = 'led' + (enabled ? ' ok' : '');
   if ($('qz-state')) $('qz-state').textContent = enabled ? (st.quiet ? '静默中，暂停' : '已启用') : '未启用';
   if ($('qz-sub')) {
-    $('qz-sub').textContent = st.quiet
-      ? '现在是静默时段，到点会自动跳过。'
-      : '到点她自己发一条，只在非静默时段。';
+    const bits = [];
+    bits.push(st.quiet ? '现在是静默时段，到点会自动跳过。' : '到点她自己发一条，只在非静默时段。');
+    if (st.lastError === 'no-hook') bits.push('最近一次没找到由头，跳过了。');
+    else if (st.lastHook) bits.push('上一条的由头：' + String(st.lastHook).slice(0, 42));
+    if (st.places && st.places.enabled && !st.places.ready) bits.push('（地点池没读到，已退化成「哪儿都没去」）');
+    $('qz-sub').textContent = bits.join(' ');
   }
   if ($('qz-today')) $('qz-today').textContent = (st.today ?? 0) + ' / ' + (c.maxPerDay ?? 2) + ' 条';
   if ($('qz-last')) $('qz-last').textContent = qzFmtAgo(st.lastAt);
   if ($('qz-next')) $('qz-next').textContent = st.nextAt ? '约 ' + qzFmtTime(st.nextAt) : '—';
-  if (st.lastError && $('qz-sub')) $('qz-sub').textContent = '上次出错：' + st.lastError;
+  if (st.lastError && st.lastError !== 'no-hook' && $('qz-sub')) $('qz-sub').textContent = '上次出错：' + st.lastError;
 }
 
 // 上一次从 /api/qzone/status 读到的配置。发布时刻已改由时间窗口决定，
 // 「间隔」两个值不再有输入框，保存时沿用配置里的旧值（后端仍会收下，只当兜底）。
 let lastQzoneConf = null;
+// 默认提示词全文（来自 /api/qzone/status 的 promptDefault），用来做「恢复默认」和保存时的比对。
+let qzPromptDefault = '';
 
 async function loadQzone() {
   try {
@@ -2081,6 +2204,31 @@ async function saveQzone() {
     })(),
     imageMode: $('qz-image')?.value || 'none',
     ugcRight: Number($('qz-ugc')?.value) || 4,
+    // 1.2：由头 / 天气 / 地点 / 落款
+    requireHook: !!$('qz-require-hook')?.checked,
+    hookSources: (() => {
+      const picked = [];
+      if ($('qz-hook-chat')?.checked) picked.push('chat');
+      if ($('qz-hook-diary')?.checked) picked.push('diary');
+      return picked.length ? picked : ['chat', 'diary'];
+    })(),
+    hookMinScore: Number($('qz-hook-score')?.value) || 0,
+    weather: {
+      enabled: !!$('qz-weather-on')?.checked,
+      latitude: Number($('qz-weather-lat')?.value) || 35.68,
+      longitude: Number($('qz-weather-lon')?.value) || 139.76,
+      timezone: $('qz-weather-tz')?.value?.trim() || 'Asia/Tokyo'
+    },
+    places: {
+      enabled: !!$('qz-places-on')?.checked,
+      limit: Number($('qz-places-limit')?.value) || 4
+    },
+    signature: !!$('qz-signature-on')?.checked,
+    // 提示词：与默认逐字相同（或留空）就存空串，表示「用默认」。
+    prompt: (() => {
+      const text = String($('qz-prompt')?.value ?? '').trim();
+      return text && text !== qzPromptDefault.trim() ? text : '';
+    })(),
     aiImage: {
       provider,
       baseUrl: $('qz-ai-baseurl')?.value?.trim() || '',
@@ -2241,6 +2389,12 @@ if ($('qz-recent-refresh')) $('qz-recent-refresh').onclick = () => void loadQzon
 if ($('qz-ai-openai')) $('qz-ai-openai').onchange = () => { if ($('qz-ai-api')) $('qz-ai-api').hidden = false; };
 if ($('qz-ai-pollinations')) $('qz-ai-pollinations').onchange = () => { if ($('qz-ai-api')) $('qz-ai-api').hidden = true; };
 if ($('qz-save')) $('qz-save').onclick = () => void saveQzone();
+if ($('qz-prompt-save')) $('qz-prompt-save').onclick = () => void saveQzone();
+if ($('qz-prompt-reset')) $('qz-prompt-reset').onclick = () => {
+  if (!qzPromptDefault) return;
+  if ($('qz-prompt')) $('qz-prompt').value = qzPromptDefault;
+  if ($('qz-prompt-state')) $('qz-prompt-state').textContent = '默认（保存后生效）';
+};
 if ($('qz-post')) $('qz-post').onclick = () => void postQzoneNow();
 if ($('qz-ai-fetch')) $('qz-ai-fetch').onclick = () => void fetchQzImageModels();
 
@@ -2889,6 +3043,18 @@ async function refreshStatus() {
       if ($('lamp-console-port')) $('lamp-console-port').textContent = '127.0.0.1:' + String(s.config.consolePort || 3100);
       if (!$('baseUrl').value) $('baseUrl').value = s.config.baseUrl || '';
       if (!$('model').value) $('model').value = s.config.model || '';
+      // 思考程度/温度/maxTokens 只在第一次渲染时回填，避免覆盖用户正在改的值
+      if ($('thinking') && !$('thinking').dataset.prefilled && s.config.thinking) {
+        const level = String(s.config.thinking);
+        if ([...$('thinking').options].some((o) => o.value === level)) $('thinking').value = level;
+        $('thinking').dataset.prefilled = '1';
+      }
+      if ($('temperature') && !$('temperature').value && s.config.temperature !== '') $('temperature').value = String(s.config.temperature);
+      if ($('maxTokens') && !$('maxTokens').value && s.config.maxTokens !== '') $('maxTokens').value = String(s.config.maxTokens);
+      if ($('thinking-hint') && s.config.thinking) {
+        $('thinking-hint').textContent = '思考程度决定回复前要想多久：想得越多越慢，思考的 token 也算进「最大输出」。当前：'
+          + ($('thinking')?.selectedOptions?.[0]?.textContent || s.config.thinking) + '。';
+      }
       if (!$('consolePort').value) $('consolePort').value = s.config.consolePort || 3100;
       const tts = s.config.tts || {};
       if (!$('ttsBaseUrl').value) $('ttsBaseUrl').value = tts.baseUrl || '';
@@ -3099,6 +3265,9 @@ async function saveAll(btnId, toastId) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         baseUrl: $('baseUrl').value, model: $('model').value, apiKey: unmaskKey($('apiKey').value),
+        thinking: $('thinking')?.value || 'auto',
+        temperature: $('temperature')?.value === '' ? undefined : $('temperature')?.value,
+        maxTokens: $('maxTokens')?.value === '' ? undefined : $('maxTokens')?.value,
         ttsBaseUrl: $('ttsBaseUrl').value, ttsModel: $('ttsModel').value,
         ttsApiKey: unmaskKey($('ttsApiKey').value), ttsEnabled: $('ttsEnabled').checked,
         webSearchApiKey: unmaskKey($('webSearchApiKey').value), webSearchBaseURL: $('webSearchBaseURL').value,
@@ -3679,6 +3848,29 @@ $('btn-fetch-tts-models').onclick = async () => {
     $('tts-models-hint').textContent = '失败：' + e.message;
   } finally { btn.disabled = false; }
 };
+
+// 「思考程度」下拉：改了立刻在提示里说明这档是什么效果，并标记已由用户选择（轮询不再覆盖）
+const THINKING_TIPS = {
+  auto: '跟随接口默认：不传参数。多数推理模型会想很多，回复偏慢。',
+  none: '不思考：最快最省，适合闲聊。',
+  minimal: '极浅思考：比「不思考」稍微多想一点。',
+  low: '浅思考：速度和质量的折中，日常聊天够用。',
+  medium: '中等思考：适合需要动脑的问题，回复会慢一些。',
+  high: '深度思考：最慢、最费 token；「最大输出」要留够，否则答案会被思考吃掉。'
+};
+function updateThinkingHint() {
+  const box = $('thinking');
+  const hint = $('thinking-hint');
+  if (!box || !hint) return;
+  const tip = THINKING_TIPS[box.value] || '';
+  hint.textContent = tip ? ('当前：' + (box.selectedOptions?.[0]?.textContent || box.value) + ' —— ' + tip) : '';
+}
+if ($('thinking')) {
+  $('thinking').addEventListener('change', () => {
+    $('thinking').dataset.prefilled = '1';
+    updateThinkingHint();
+  });
+}
 
 $('btn-test-tts').onclick = async () => {
   const btn = $('btn-test-tts');

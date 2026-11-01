@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { rpcOk, rpcFail } from './contract.mjs';
 import { createToolRegistry } from './tools.mjs';
 import { requestMetadata, modelFailure, safeFailure } from './model-diagnostics.mjs';
+import { llmThinkingBody, describeThinking } from '../llm-params.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -98,6 +99,8 @@ export function createStandaloneBackend(cfg, { log = () => {}, toolRegistry } = 
   const settingsFile = path.join(stateDir, 'settings.json');
 
   const tools = toolRegistry ?? createToolRegistry({ log });
+  // 启动时说一句思考程度：会话里出现的怪现象（回得慢、答案被截断）多半跟它有关。
+  log(`[standalone] 模型思考程度：${describeThinking(llm.thinking)}`);
   const diagnosticFile = path.join(stateDir, 'model-diagnostics.json');
   const diagnostics = [];
   function diagnose(record) {
@@ -263,7 +266,9 @@ export function createStandaloneBackend(cfg, { log = () => {}, toolRegistry } = 
       maxTokens: Number(llm.maxTokens ?? 4096),
       temperature: llm.temperature === undefined ? 1.0 : Number(llm.temperature),
       timeoutMs: Number(llm.timeoutMs ?? 180000),
-      extraHeaders: llm.extraHeaders ?? {}
+      extraHeaders: llm.extraHeaders ?? {},
+      // 「思考程度」：auto 不传参数（与旧版本一致），其余翻成 reasoning_effort
+      thinkingBody: llmThinkingBody(llm)
     };
   }
 
@@ -278,7 +283,8 @@ export function createStandaloneBackend(cfg, { log = () => {}, toolRegistry } = 
       messages,
       temperature: c.temperature,
       max_tokens: c.maxTokens,
-      stream: false
+      stream: false,
+      ...c.thinkingBody
     };
     if (toolDefs?.length) {
       body.tools = toolDefs;
